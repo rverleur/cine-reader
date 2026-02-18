@@ -1,0 +1,22 @@
+# OS / IDE
+.DS_Store
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.build/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# MATLAB build artifacts
+*.mex*
+
+# Local data
+*.tiff
+*.tif
+*.npz
+sample_data/*.cine

@@ -1,0 +1,8 @@
+include README.md
+recursive-include python/src/cine_reader/libs *.dll *.so *.dylib
+recursive-include python/examples *.py
+recursive-include python/tests *.py
+recursive-include Matlab *.m *.c *.mex* *.dll *.so *.dylib *.h
+recursive-include c_src *.c *.h
+recursive-include docs *.pdf
+recursive-include sample_data *.md
