@@ -33,7 +33,7 @@ cine.LoadFrame(first);
 img = cine.PixelArray;
 
 avg = cine.AverageFrames(first, first+10, false);
-bg  = cine.ModeFrames(first, first+20, false);
+bg  = cine.ModeFrames(first, first+20, false, 'method', 'auto');
 rgb = cine.GetFrameRGB(first, 'RGGB');
 
 cine.SaveFramesToNewFile('trimmed_out.cine', first, first+50);
@@ -46,3 +46,29 @@ The MATLAB class now includes:
 - `ModeFrames`
 - `GetFrameRGB`
 - existing methods (`LoadFrame`, `AverageFrames`, `ReplaceDeadPixels`, `LoadFramesBatch`)
+
+## Internal Split
+
+Heavy math helpers are split into `Matlab/private/`:
+- `Matlab/private/cine_replace_dead_pixels.m`
+- `Matlab/private/cine_demosaic_bilinear.m`
+- `Matlab/private/cine_mode_mad_stack.m`
+
+`Cine.m` remains the public entry point and orchestrates file I/O.
+
+## Performance Hints
+
+- `AverageFrames(..., replace, chunk_size)` uses chunked accumulation; increase `chunk_size` on high-memory machines.
+- `ModeFrames(..., 'method', 'topk')` gives bounded-memory robust backgrounds for long ranges.
+- `ModeFrames(..., 'method', 'mad')` keeps legacy quantile/MAD behavior.
+- Keep `replace=false` unless dead-pixel correction is required.
+
+`ModeFrames` name/value options:
+- `'method'`: `'auto' | 'mad' | 'topk'`
+- `'q_bg'`: bright quantile baseline (default `0.80`)
+- `'k_sigma'`: MAD rejection scale for `mad` (default `2.5`)
+- `'min_keep'`: minimum accepted samples (default `3`)
+- `'max_keep'`: cap for `topk` memory (default `96`, or `[]` for no cap)
+- `'stack_limit'`: `auto` threshold for switching to `topk` (default `128`)
+
+Detailed API notes are in `Matlab/API.md`.

@@ -21,7 +21,17 @@ def test_open_sample_cine_if_available() -> None:
         assert cine.PixelArray.size > 0
 
         first = cine.FileHeader.FirstImageNo
+        last = first + min(4, cine.FileHeader.ImageCount - 1)
         cine.LoadFrame(first)
         assert cine.PixelArray.ndim in (2, 3)
+
+        avg = cine.AverageFrames(first, last)
+        assert avg.shape == cine.PixelArray.shape
+
+        if cine.PixelArray.ndim == 2:
+            mode_mad = cine.ModeFrames(first, last, method="mad")
+            mode_topk = cine.ModeFrames(first, last, method="topk")
+            assert mode_mad.shape == cine.PixelArray.shape
+            assert mode_topk.shape == cine.PixelArray.shape
     finally:
         cine.CloseFile()

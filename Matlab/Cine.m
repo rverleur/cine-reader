@@ -251,23 +251,38 @@ classdef Cine < handle
             % if obj.IsTopDown, obj.PixelArray = flipud(obj.PixelArray); end
         end
 
-        function avgImg = AverageFrames(obj, start_frame, end_frame, replace)
+        function avgImg = AverageFrames(obj, start_frame, end_frame, replace, chunk_size)
+            %AVERAGEFRAMES Mean frame with chunked accumulation for speed/memory.
             if nargin<4, replace = false; end
+            if nargin<5 || isempty(chunk_size), chunk_size = 8; end
             firstNo = int32(obj.FileHeader.FirstImageNo);
             lastNo  = firstNo + int32(obj.FileHeader.ImageCount)-1;
             if start_frame < firstNo || end_frame > lastNo, error('Frame range out of bounds.'); end
 
-            h = abs(double(obj.ImageHeader.biHeight));
-            w = double(obj.ImageHeader.biWidth);
-            acc = zeros(h,w,'double');
+            acc = [];
+            totalCount = 0;
+            fr = int32(start_frame);
+            while fr <= int32(end_frame)
+                n = min(int32(chunk_size), int32(end_frame) - fr + 1);
+                batch = obj.LoadFramesBatch(fr, double(n));
 
-            for fr = int32(start_frame):int32(end_frame)
-                obj.LoadFrame(fr);
-                if replace, obj.ReplaceDeadPixels(); end
-                acc = acc + double(obj.PixelArray);
+                if replace && ndims(batch)==3
+                    for k = 1:double(n)
+                        batch(:,:,k) = cine_replace_dead_pixels(batch(:,:,k), uint16(4095));
+                    end
+                end
+
+                sumDim = ndims(batch);
+                chunkSum = sum(double(batch), sumDim);
+                if isempty(acc)
+                    acc = zeros(size(chunkSum), 'double');
+                end
+                acc = acc + chunkSum;
+                totalCount = totalCount + double(n);
+                fr = fr + n;
             end
-            acc = acc / double(end_frame - start_frame + 1);
-            avgImg = uint16(acc);
+
+            avgImg = cast(round(acc / totalCount), class(obj.PixelArray));
         end
 
         function SaveFramesToNewFile(obj, output_filename, start_frame, end_frame)
@@ -325,7 +340,16 @@ classdef Cine < handle
             end
         end
 
-        function out = ModeFrames(obj, start_frame, end_frame, replace)
+        function out = ModeFrames(obj, start_frame, end_frame, replace, varargin)
+            %MODEFRAMES Robust bright background estimate over frame range.
+            %
+            % Name/value options:
+            %   "method"      : "auto" (default), "mad", "topk"
+            %   "q_bg"        : bright baseline quantile (default 0.80)
+            %   "k_sigma"     : MAD rejection scale for method=mad (default 2.5)
+            %   "min_keep"    : minimum kept samples per pixel (default 3)
+            %   "max_keep"    : cap for top-k memory (default 96, [] for unlimited)
+            %   "stack_limit" : auto->mad threshold (default 128 frames)
             if nargin<4, replace = false; end
             firstNo = int32(obj.FileHeader.FirstImageNo);
             lastNo  = firstNo + int32(obj.FileHeader.ImageCount)-1;
@@ -333,35 +357,111 @@ classdef Cine < handle
                 error('Frame range out of bounds.');
             end
 
-            frames = [];
-            for fr = int32(start_frame):int32(end_frame)
-                obj.LoadFrame(fr);
-                if ndims(obj.PixelArray) ~= 2
-                    error('ModeFrames supports mono frames only.');
+            opts = struct( ...
+                "method", "auto", ...
+                "q_bg", 0.80, ...
+                "k_sigma", 2.5, ...
+                "min_keep", 3, ...
+                "max_keep", 96, ...
+                "stack_limit", 128 ...
+            );
+            if mod(numel(varargin),2) ~= 0
+                error('ModeFrames name/value options must be pairs.');
+            end
+            for i = 1:2:numel(varargin)
+                key = lower(string(varargin{i}));
+                val = varargin{i+1};
+                switch key
+                    case "method",      opts.method = lower(string(val));
+                    case "q_bg",        opts.q_bg = double(val);
+                    case "k_sigma",     opts.k_sigma = double(val);
+                    case "min_keep",    opts.min_keep = double(val);
+                    case "max_keep",    opts.max_keep = val;
+                    case "stack_limit", opts.stack_limit = double(val);
+                    otherwise, error('Unknown ModeFrames option: %s', char(key));
                 end
-                if replace, obj.ReplaceDeadPixels(); end
-                frames = cat(3, frames, single(obj.PixelArray)); %#ok<AGROW>
             end
 
-            stack = permute(frames, [3 1 2]); % [T H W]
-            q_bg = 0.80;
-            k_sigma = 2.5;
-            min_keep = 3;
+            frameCount = double(end_frame - start_frame + 1);
+            method = opts.method;
+            if method == "auto"
+                if frameCount <= opts.stack_limit
+                    method = "mad";
+                else
+                    method = "topk";
+                end
+            end
 
-            bg = prctile(stack, q_bg * 100, 1);
-            med = median(stack, 1);
-            mad = median(abs(stack - med), 1);
-            sigma = max(1.4826 * mad, 1e-6);
-            keep = stack >= (bg - k_sigma * sigma);
+            if method == "mad"
+                frames = [];
+                for fr = int32(start_frame):int32(end_frame)
+                    obj.LoadFrame(fr);
+                    if ndims(obj.PixelArray) ~= 2
+                        error('ModeFrames supports mono frames only.');
+                    end
+                    pix = obj.PixelArray;
+                    if replace
+                        pix = cine_replace_dead_pixels(pix, uint16(4095));
+                    end
+                    frames = cat(3, frames, single(pix)); %#ok<AGROW>
+                end
+                stack = permute(frames, [3 1 2]); % [T H W]
+                out = cine_mode_mad_stack(stack, opts.q_bg, opts.k_sigma, opts.min_keep);
+                return;
+            end
 
-            num = sum(stack .* keep, 1);
-            den = sum(keep, 1);
-            out = squeeze(bg);
-            num2 = squeeze(num);
-            den2 = squeeze(den);
-            mask = den2 >= min_keep;
-            out(mask) = num2(mask) ./ den2(mask);
-            out = uint16(max(0, min(double(intmax('uint16')), round(out))));
+            if method == "topk"
+                kKeep = max(opts.min_keep, ceil((1 - opts.q_bg) * frameCount));
+                if ~isempty(opts.max_keep)
+                    kKeep = min(kKeep, double(opts.max_keep));
+                end
+                kKeep = max(1, kKeep);
+
+                topk = [];
+                rr = []; cc = [];
+                loaded = 0;
+                for fr = int32(start_frame):int32(end_frame)
+                    obj.LoadFrame(fr);
+                    if ndims(obj.PixelArray) ~= 2
+                        error('ModeFrames supports mono frames only.');
+                    end
+                    pix = obj.PixelArray;
+                    if replace
+                        pix = cine_replace_dead_pixels(pix, uint16(4095));
+                    end
+                    frame = single(pix);
+
+                    if isempty(topk)
+                        [h,w] = size(frame);
+                        topk = -inf(kKeep, h, w, 'single');
+                        [rr,cc] = ndgrid(1:h, 1:w);
+                    end
+
+                    if loaded < kKeep
+                        topk(loaded+1,:,:) = frame;
+                    else
+                        [minVals, minIdx] = min(topk, [], 1);
+                        minVals = squeeze(minVals);
+                        minIdx = squeeze(minIdx);
+                        replaceMask = frame > minVals;
+                        if any(replaceMask, 'all')
+                            rrSub = rr(replaceMask);
+                            ccSub = cc(replaceMask);
+                            idxSub = minIdx(replaceMask);
+                            lin = sub2ind(size(topk), idxSub, rrSub, ccSub);
+                            topk(lin) = frame(replaceMask);
+                        end
+                    end
+                    loaded = loaded + 1;
+                end
+
+                used = min(loaded, kKeep);
+                out = squeeze(mean(topk(1:used,:,:), 1));
+                out = uint16(max(0, min(double(intmax('uint16')), round(out))));
+                return;
+            end
+
+            error('ModeFrames method must be auto, mad, or topk.');
         end
 
         function rgb = GetFrameRGB(obj, frame_no, bayer_pattern)
@@ -377,7 +477,7 @@ classdef Cine < handle
                 return;
             end
             if ndims(obj.PixelArray)==2
-                rgb = obj.demosaicBilinear(obj.PixelArray, bayer_pattern);
+                rgb = cine_demosaic_bilinear(obj.PixelArray, bayer_pattern);
                 return;
             end
             error('Unsupported frame shape for RGB conversion.');
@@ -385,24 +485,7 @@ classdef Cine < handle
 
         function ReplaceDeadPixels(obj, dead_value)
             if nargin<2, dead_value = uint16(4095); end
-            frame = obj.PixelArray;
-            if ~isa(frame,'uint16'), frame = uint16(frame); end
-            frameF = single(frame);
-            H = size(frameF,1); W = size(frameF,2);
-            deadMask = frame == dead_value;
-            [ys,xs] = find(deadMask);
-            out = frameF;
-            for k = 1:numel(ys)
-                y = ys(k); x = xs(k);
-                y0 = max(1,y-1); y1 = min(H,y+1);
-                x0 = max(1,x-1); x1 = min(W,x+1);
-                nb = frameF(y0:y1, x0:x1);
-                nb(2,2) = NaN;
-                nb(nb==single(dead_value)) = NaN;
-                nb = nb(~isnan(nb));
-                if ~isempty(nb), out(y,x) = mean(nb(:)); end
-            end
-            obj.PixelArray = cast(out, 'like', frame);
+            obj.PixelArray = cine_replace_dead_pixels(obj.PixelArray, dead_value);
         end
 
         function out = LoadFramesBatch(obj, start_frame, count)
@@ -555,62 +638,7 @@ classdef Cine < handle
         end
 
         function rgb = demosaicBilinear(~, frame, pattern)
-            inClass = class(frame);
-            frame = single(frame);
-            [h,w] = size(frame);
-            [yy,xx] = ndgrid(0:h-1, 0:w-1);
-            evenR = mod(yy,2)==0;
-            evenC = mod(xx,2)==0;
-
-            pad = frame([1,1:h,h], [1,1:w,w]);
-            c  = pad(2:end-1, 2:end-1);
-            up = pad(1:end-2, 2:end-1);
-            dn = pad(3:end  , 2:end-1);
-            lf = pad(2:end-1, 1:end-2);
-            rt = pad(2:end-1, 3:end  );
-            ul = pad(1:end-2, 1:end-2);
-            ur = pad(1:end-2, 3:end  );
-            dl = pad(3:end  , 1:end-2);
-            dr = pad(3:end  , 3:end  );
-
-            p = upper(string(pattern));
-            if p=="RGGB"
-                rMask = evenR & evenC;
-                bMask = ~evenR & ~evenC;
-                gRMask = evenR & ~evenC;
-                gBMask = ~evenR & evenC;
-            elseif p=="BGGR"
-                bMask = evenR & evenC;
-                rMask = ~evenR & ~evenC;
-                gBMask = evenR & ~evenC;
-                gRMask = ~evenR & evenC;
-            elseif p=="GRBG"
-                gRMask = evenR & evenC;
-                rMask = evenR & ~evenC;
-                bMask = ~evenR & evenC;
-                gBMask = ~evenR & ~evenC;
-            elseif p=="GBRG"
-                gBMask = evenR & evenC;
-                bMask = evenR & ~evenC;
-                rMask = ~evenR & evenC;
-                gRMask = ~evenR & ~evenC;
-            else
-                error('Unsupported Bayer pattern: %s', char(p));
-            end
-
-            r = zeros(h,w,'single'); g = r; b = r;
-            gCross = (up + dn + lf + rt) * 0.25;
-            rbDiag = (ul + ur + dl + dr) * 0.25;
-            lr = (lf + rt) * 0.5;
-            ud = (up + dn) * 0.5;
-
-            r(rMask) = c(rMask);   g(rMask) = gCross(rMask); b(rMask) = rbDiag(rMask);
-            b(bMask) = c(bMask);   g(bMask) = gCross(bMask); r(bMask) = rbDiag(bMask);
-            g(gRMask) = c(gRMask); r(gRMask) = lr(gRMask);   b(gRMask) = ud(gRMask);
-            g(gBMask) = c(gBMask); r(gBMask) = ud(gBMask);   b(gBMask) = lr(gBMask);
-
-            rgb = cat(3, r, g, b);
-            rgb = cast(round(rgb), inClass);
+            rgb = cine_demosaic_bilinear(frame, pattern);
         end
 
         % ---------- parsing helpers ----------

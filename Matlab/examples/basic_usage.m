@@ -13,7 +13,7 @@ cine.LoadFrame(first);
 imshow(cine.PixelArray, [], 'Border', 'tight');
 
 avg = cine.AverageFrames(first, min(first + 10, last), false);
-bg  = cine.ModeFrames(first, min(first + 20, last), false);
+bg  = cine.ModeFrames(first, min(first + 20, last), false, 'method', 'auto');
 rgb = cine.GetFrameRGB(first, 'RGGB');
 
 cine.SaveFramesToNewFile('trimmed_out.cine', first, min(first + 20, last));

@@ -12,7 +12,7 @@ assert(~isempty(cine.PixelArray), 'PixelArray should not be empty');
 avg = cine.AverageFrames(first, min(first + 5, last), false);
 assert(~isempty(avg), 'AverageFrames failed');
 
-bg = cine.ModeFrames(first, min(first + 5, last), false);
+bg = cine.ModeFrames(first, min(first + 5, last), false, 'method', 'mad');
 assert(~isempty(bg), 'ModeFrames failed');
 
 disp('MATLAB cine smoke test passed.');

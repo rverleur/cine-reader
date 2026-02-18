@@ -14,7 +14,7 @@ def main() -> None:
     end = min(first + 20, first + cine.FileHeader.ImageCount - 1)
 
     cine.SaveFramesToNewFile("trimmed_20_frames.cine", first, end)
-    bg = cine.ModeFrames(first, end)
+    bg = cine.ModeFrames(first, end, method="topk")
     print("Background image:", bg.shape, bg.dtype, int(bg.min()), int(bg.max()))
 
     cine.CloseFile()

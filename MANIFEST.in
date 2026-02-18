@@ -1,4 +1,6 @@
 include README.md
+recursive-include python *.md
+recursive-include Matlab *.md
 recursive-include python/src/cine_reader/libs *.dll *.so *.dylib
 recursive-include python/examples *.py
 recursive-include python/tests *.py

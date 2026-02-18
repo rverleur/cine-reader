@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import array
 import struct
 from pathlib import Path
 
 import numpy as np
 
+from .frame_decode import decode_frame_payload
+from .image_ops import demosaic_bilinear, replace_dead_pixels_mono
+from .stats import average_from_frame_iter, robust_background_mad_stack, robust_background_topk
 from .unpack import unpack_10bit_data
 
 
@@ -51,60 +53,14 @@ class Cine:
         self.LoadFrame(self.CurrentFrame)
 
     def _decode_frame(self, raw: bytes) -> np.ndarray:
-        bit_count = int(self.ImageHeader.biBitCount)
-        width = int(self.ImageHeader.biWidth)
-        height = abs(int(self.ImageHeader.biHeight))
-        channels = 1 if bit_count in (8, 16) else 3
-
-        if bit_count in (8, 24):
-            row_bytes = width * channels
-            row_stride = ((row_bytes + 3) // 4) * 4
-            buffer_u8 = np.frombuffer(raw, dtype=np.uint8)
-            if buffer_u8.size == height * row_stride:
-                rows = buffer_u8.reshape(height, row_stride)[:, :row_bytes]
-            elif buffer_u8.size == height * row_bytes:
-                rows = buffer_u8.reshape(height, row_bytes)
-            else:
-                raise ValueError(
-                    f"8/24-bit size mismatch: got {buffer_u8.size}, expected "
-                    f"{height * row_bytes} or {height * row_stride}"
-                )
-            if channels == 1:
-                return rows.reshape(height, width).copy()
-            return rows.reshape(height, width, channels).copy()
-
-        if bit_count not in (16, 48):
-            raise ValueError(f"Unsupported bit depth: {bit_count}")
-
-        if int(self.CameraSetup.RealBPP) == 10:
-            unpacked = self.unpack_10bit_data(raw)
-            expected = height * width * channels
-            if unpacked.size < expected:
-                raise ValueError(
-                    f"Packed 10-bit decode returned {unpacked.size} samples, expected at least {expected}"
-                )
-            unpacked = unpacked[:expected]
-            if channels == 1:
-                return unpacked.reshape(height, width)
-            return unpacked.reshape(height, width, channels)
-
-        row_bytes = width * channels * 2
-        row_stride = ((row_bytes + 3) // 4) * 4
-        buffer_u8 = np.frombuffer(raw, dtype=np.uint8)
-        if buffer_u8.size == height * row_stride:
-            rows_u8 = buffer_u8.reshape(height, row_stride)[:, :row_bytes]
-        elif buffer_u8.size == height * row_bytes:
-            rows_u8 = buffer_u8.reshape(height, row_bytes)
-        else:
-            raise ValueError(
-                f"16/48-bit size mismatch: got {buffer_u8.size}, expected "
-                f"{height * row_bytes} or {height * row_stride}"
-            )
-        rows_u8 = np.ascontiguousarray(rows_u8)
-        values = rows_u8.view("<u2")
-        if channels == 1:
-            return values.reshape(height, width)
-        return values.reshape(height, width, channels)
+        return decode_frame_payload(
+            raw,
+            bit_count=int(self.ImageHeader.biBitCount),
+            width=int(self.ImageHeader.biWidth),
+            height_signed=int(self.ImageHeader.biHeight),
+            real_bpp=int(self.CameraSetup.RealBPP),
+            unpack_10bit_fn=self.unpack_10bit_data,
+        )
 
     def LoadFrame(self, ImageNo, convert_bgr_to_rgb=False):
         """Load a single frame into `self.PixelArray`."""
@@ -154,37 +110,7 @@ class Cine:
 
     def ReplaceDeadPixels(self, dead_value=4095):
         """Replace dead pixels with the mean of valid 8-neighbors (mono frames)."""
-        if self.PixelArray.ndim != 2:
-            return
-
-        frame = self.PixelArray
-        frame_f = frame.astype(np.float32, copy=False)
-        dead_mask = frame == dead_value
-        if not np.any(dead_mask):
-            return
-
-        valid = ~dead_mask
-        values = np.where(valid, frame_f, 0.0)
-        valid_i = valid.astype(np.int16)
-
-        pv = np.pad(values, ((1, 1), (1, 1)), mode="constant", constant_values=0.0)
-        pm = np.pad(valid_i, ((1, 1), (1, 1)), mode="constant", constant_values=0)
-
-        nbr_sum = (
-            pv[:-2, :-2] + pv[:-2, 1:-1] + pv[:-2, 2:] +
-            pv[1:-1, :-2] +                 pv[1:-1, 2:] +
-            pv[2:, :-2] + pv[2:, 1:-1] + pv[2:, 2:]
-        )
-        nbr_cnt = (
-            pm[:-2, :-2] + pm[:-2, 1:-1] + pm[:-2, 2:] +
-            pm[1:-1, :-2] +                 pm[1:-1, 2:] +
-            pm[2:, :-2] + pm[2:, 1:-1] + pm[2:, 2:]
-        )
-
-        out = frame_f.copy()
-        replace_mask = dead_mask & (nbr_cnt > 0)
-        out[replace_mask] = nbr_sum[replace_mask] / nbr_cnt[replace_mask]
-        self.PixelArray = out.astype(frame.dtype, copy=False)
+        self.PixelArray = replace_dead_pixels_mono(self.PixelArray, dead_value=dead_value)
         self.PixelData = self.PixelArray.reshape(-1)
 
     def unpack_10bit_data(self, data):
@@ -505,12 +431,24 @@ class Cine:
             self.BinDaqDescription = self.SetupData[10552:10680]
             self.DaqOptions = bool(int.from_bytes(self.SetupData[10680:10684], "little", signed=False))
 
-    def SaveFramesToNewFile(self, output_filename, start_frame, end_frame):
-        """Write a trimmed `.cine` containing frames `[start_frame, end_frame]`."""
+    def _validate_frame_range(self, start_frame: int, end_frame: int) -> tuple[int, int]:
         first = int(self.FileHeader.FirstImageNo)
         last = first + int(self.FileHeader.ImageCount) - 1
         if start_frame < first or end_frame > last or end_frame < start_frame:
             raise ValueError("Frame range out of bounds.")
+        return first, last
+
+    def _iter_loaded_frames(self, start_frame: int, end_frame: int, *, replace_dead_pixels: bool = False):
+        """Yield loaded frames for a range without retaining a full stack in memory."""
+        for frame_no in range(start_frame, end_frame + 1):
+            self.LoadFrame(frame_no)
+            if replace_dead_pixels and self.PixelArray.ndim == 2:
+                self.ReplaceDeadPixels()
+            yield self.PixelArray
+
+    def SaveFramesToNewFile(self, output_filename, start_frame, end_frame):
+        """Write a trimmed `.cine` containing frames `[start_frame, end_frame]`."""
+        first, _ = self._validate_frame_range(start_frame, end_frame)
 
         new_image_count = int(end_frame - start_frame + 1)
         bytes_per_offset = 8 if int(self.FileHeader.Version) == 1 else 4
@@ -551,160 +489,79 @@ class Cine:
                 output_file.write(self.file.read(frame_size))
 
     def AverageFrames(self, start_frame, end_frame, replace=False):
-        """Compute per-pixel mean over a frame range."""
-        first = int(self.FileHeader.FirstImageNo)
-        last = first + int(self.FileHeader.ImageCount) - 1
-        if start_frame < first or end_frame > last or end_frame < start_frame:
-            raise ValueError("Frame range out of bounds.")
+        """Compute per-pixel mean over a frame range.
 
-        acc = None
-        loaded = 0
-        out_dtype = np.uint16
+        For speed, this uses chunked accumulation with bounded memory.
+        """
+        self._validate_frame_range(start_frame, end_frame)
+        frame_iter = self._iter_loaded_frames(
+            start_frame,
+            end_frame,
+            replace_dead_pixels=replace,
+        )
+        avg, _ = average_from_frame_iter(frame_iter, out_dtype=self.PixelArray.dtype, chunk_size=8)
+        return avg
 
-        for frame in range(start_frame, end_frame + 1):
-            self.LoadFrame(frame)
-            if replace and self.PixelArray.ndim == 2:
-                self.ReplaceDeadPixels()
-            current = self.PixelArray
-            out_dtype = current.dtype
-            if acc is None:
-                acc = np.zeros_like(current, dtype=np.float64)
-            acc += current.astype(np.float64)
-            loaded += 1
+    def ModeFrames(
+        self,
+        start_frame,
+        end_frame,
+        replace=False,
+        method: str = "auto",
+        q_bg: float = 0.80,
+        k_sigma: float = 2.5,
+        min_keep: int = 3,
+        max_keep: int | None = 96,
+        stack_limit: int = 128,
+    ):
+        """Robust bright-background estimate for mono data.
 
-        if loaded == 0:
-            raise RuntimeError("No frames were loaded successfully.")
-        mean = np.rint(acc / loaded)
-        return mean.astype(out_dtype)
+        Parameters
+        ----------
+        method:
+            `\"auto\"`, `\"mad\"`, or `\"topk\"`.
+            `\"mad\"` matches legacy quantile/MAD behavior (full stack).
+            `\"topk\"` is low-memory and generally faster for long ranges.
+            `\"auto\"` uses `\"mad\"` for short ranges (`<= stack_limit`) and
+            `\"topk\"` otherwise.
+        """
+        self._validate_frame_range(start_frame, end_frame)
+        frame_count = end_frame - start_frame + 1
+        method_norm = method.lower().strip()
+        if method_norm == "auto":
+            method_norm = "mad" if frame_count <= stack_limit else "topk"
 
-    def ModeFrames(self, start_frame, end_frame, replace=False):
-        """Robust background estimate for mono data over a frame range."""
-        first = int(self.FileHeader.FirstImageNo)
-        last = first + int(self.FileHeader.ImageCount) - 1
-        if start_frame < first or end_frame > last:
-            raise ValueError("Frame range out of bounds.")
-        if end_frame < start_frame:
-            raise ValueError("end_frame must be >= start_frame.")
-
-        frames = []
-        for frame in range(start_frame, end_frame + 1):
-            self.LoadFrame(frame)
-            if self.PixelArray.ndim != 2:
-                raise ValueError("ModeFrames currently supports mono frames only.")
-            if replace:
-                self.ReplaceDeadPixels()
-            frames.append(self.PixelArray.astype(np.float32, copy=True))
-
-        if not frames:
-            raise RuntimeError("No frames were loaded successfully.")
-
-        stack = np.stack(frames, axis=0)
-        q_bg = 0.80
-        k_sigma = 2.5
-        min_keep = 3
-
-        bg = np.quantile(stack, q_bg, axis=0)
-        med = np.median(stack, axis=0)
-        mad = np.median(np.abs(stack - med[None, :, :]), axis=0)
-        sigma = np.maximum(1.4826 * mad, 1e-6)
-        keep = stack >= (bg[None, :, :] - k_sigma * sigma[None, :, :])
-        num = np.sum(np.where(keep, stack, 0.0), axis=0)
-        den = np.sum(keep, axis=0)
-        out = np.divide(num, den, out=bg.copy(), where=(den >= min_keep))
-        out = np.clip(np.rint(out), 0, np.iinfo(np.uint16).max).astype(np.uint16)
-        return out
+        frame_iter = self._iter_loaded_frames(start_frame, end_frame, replace_dead_pixels=replace)
+        if method_norm == "mad":
+            return robust_background_mad_stack(
+                frame_iter,
+                q_bg=q_bg,
+                k_sigma=k_sigma,
+                min_keep=min_keep,
+                out_dtype=np.uint16,
+            )
+        if method_norm == "topk":
+            return robust_background_topk(
+                frame_iter,
+                frame_count=frame_count,
+                q_bg=q_bg,
+                min_keep=min_keep,
+                max_keep=max_keep,
+                out_dtype=np.uint16,
+            )
+        raise ValueError("method must be one of: 'auto', 'mad', 'topk'")
 
     def LoadFramesBatch(self, start_frame, count):
         """Load `count` consecutive frames into a stacked array."""
         if count <= 0:
             raise ValueError("count must be > 0")
         stop_frame = start_frame + count - 1
-        first = int(self.FileHeader.FirstImageNo)
-        last = first + int(self.FileHeader.ImageCount) - 1
-        if start_frame < first or stop_frame > last:
-            raise ValueError("Frame range out of bounds.")
-
-        self.LoadFrame(start_frame)
-        shape = self.PixelArray.shape
-        dtype = self.PixelArray.dtype
-        out = np.zeros(shape + (count,), dtype=dtype)
-        out[..., 0] = self.PixelArray
-        for i in range(1, count):
-            self.LoadFrame(start_frame + i)
-            out[..., i] = self.PixelArray
-        return out
-
-    @staticmethod
-    def _demosaic_bilinear(frame, pattern="RGGB"):
-        input_dtype = frame.dtype
-        frame = frame.astype(np.float32, copy=False)
-        h, w = frame.shape
-        yy, xx = np.indices((h, w))
-        even_r = (yy % 2) == 0
-        even_c = (xx % 2) == 0
-
-        pad = np.pad(frame, ((1, 1), (1, 1)), mode="edge")
-        c = pad[1:-1, 1:-1]
-        up = pad[:-2, 1:-1]
-        dn = pad[2:, 1:-1]
-        lf = pad[1:-1, :-2]
-        rt = pad[1:-1, 2:]
-        ul = pad[:-2, :-2]
-        ur = pad[:-2, 2:]
-        dl = pad[2:, :-2]
-        dr = pad[2:, 2:]
-
-        pattern = pattern.upper()
-        if pattern == "RGGB":
-            r_mask = even_r & even_c
-            b_mask = (~even_r) & (~even_c)
-            g_r_mask = even_r & (~even_c)
-            g_b_mask = (~even_r) & even_c
-        elif pattern == "BGGR":
-            b_mask = even_r & even_c
-            r_mask = (~even_r) & (~even_c)
-            g_b_mask = even_r & (~even_c)
-            g_r_mask = (~even_r) & even_c
-        elif pattern == "GRBG":
-            g_r_mask = even_r & even_c
-            r_mask = even_r & (~even_c)
-            b_mask = (~even_r) & even_c
-            g_b_mask = (~even_r) & (~even_c)
-        elif pattern == "GBRG":
-            g_b_mask = even_r & even_c
-            b_mask = even_r & (~even_c)
-            r_mask = (~even_r) & even_c
-            g_r_mask = (~even_r) & (~even_c)
-        else:
-            raise ValueError(f"Unsupported Bayer pattern: {pattern}")
-
-        r = np.zeros_like(frame, dtype=np.float32)
-        g = np.zeros_like(frame, dtype=np.float32)
-        b = np.zeros_like(frame, dtype=np.float32)
-
-        g_cross = (up + dn + lf + rt) * 0.25
-        rb_diag = (ul + ur + dl + dr) * 0.25
-        lr = (lf + rt) * 0.5
-        ud = (up + dn) * 0.5
-
-        r[r_mask] = c[r_mask]
-        g[r_mask] = g_cross[r_mask]
-        b[r_mask] = rb_diag[r_mask]
-
-        b[b_mask] = c[b_mask]
-        g[b_mask] = g_cross[b_mask]
-        r[b_mask] = rb_diag[b_mask]
-
-        g[g_r_mask] = c[g_r_mask]
-        r[g_r_mask] = lr[g_r_mask]
-        b[g_r_mask] = ud[g_r_mask]
-
-        g[g_b_mask] = c[g_b_mask]
-        r[g_b_mask] = ud[g_b_mask]
-        b[g_b_mask] = lr[g_b_mask]
-
-        rgb = np.stack((r, g, b), axis=-1)
-        return np.rint(rgb).astype(input_dtype, copy=False)
+        self._validate_frame_range(start_frame, stop_frame)
+        frames = []
+        for frame_no in range(start_frame, stop_frame + 1):
+            self.LoadFrame(frame_no)
+            frames.append(self.PixelArray.copy())
+        return np.stack(frames, axis=-1)
 
     def GetFrameRGB(self, image_no=None, bayer_pattern="RGGB"):
         """Return the current frame as RGB, with optional simple Bayer demosaic."""
@@ -714,7 +571,7 @@ class Cine:
         if self.PixelArray.ndim == 3:
             return self.PixelArray[..., ::-1].copy()
         if self.PixelArray.ndim == 2:
-            return self._demosaic_bilinear(self.PixelArray, pattern=bayer_pattern)
+            return demosaic_bilinear(self.PixelArray, pattern=bayer_pattern)
         raise ValueError("Unsupported frame shape for RGB conversion")
 
     # snake_case aliases
@@ -739,8 +596,29 @@ class Cine:
     def average_frames(self, start_frame, end_frame, replace=False):
         return self.AverageFrames(start_frame, end_frame, replace=replace)
 
-    def mode_frames(self, start_frame, end_frame, replace=False):
-        return self.ModeFrames(start_frame, end_frame, replace=replace)
+    def mode_frames(
+        self,
+        start_frame,
+        end_frame,
+        replace=False,
+        method: str = "auto",
+        q_bg: float = 0.80,
+        k_sigma: float = 2.5,
+        min_keep: int = 3,
+        max_keep: int | None = 96,
+        stack_limit: int = 128,
+    ):
+        return self.ModeFrames(
+            start_frame,
+            end_frame,
+            replace=replace,
+            method=method,
+            q_bg=q_bg,
+            k_sigma=k_sigma,
+            min_keep=min_keep,
+            max_keep=max_keep,
+            stack_limit=stack_limit,
+        )
 
     def load_frames_batch(self, start_frame, count):
         return self.LoadFramesBatch(start_frame, count)
