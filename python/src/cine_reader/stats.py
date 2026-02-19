@@ -16,9 +16,10 @@ def robust_background_mad_stack(
     min_keep: int = 3,
     out_dtype: np.dtype = np.uint16,
 ) -> np.ndarray:
-    """Original quantile/MAD robust background estimator.
+    """Quantile/MAD robust background estimator (full-stack implementation).
 
-    This matches the previous behavior but stores the full frame stack.
+    Works with mono (2D) and color (3D) frames by operating element-wise over
+    all trailing dimensions.
     """
     if not (0.0 < q_bg < 1.0):
         raise ValueError("q_bg must be between 0 and 1")
@@ -26,15 +27,17 @@ def robust_background_mad_stack(
     data = [np.asarray(frame, dtype=np.float32) for frame in frames]
     if not data:
         raise RuntimeError("No frames were provided.")
-    if data[0].ndim != 2:
-        raise ValueError("robust_background_mad_stack currently supports mono frames only")
+
+    shape0 = data[0].shape
+    if any(arr.shape != shape0 for arr in data[1:]):
+        raise ValueError("All frames must have the same shape")
 
     stack = np.stack(data, axis=0)
     bg = np.quantile(stack, q_bg, axis=0)
     med = np.median(stack, axis=0)
-    mad = np.median(np.abs(stack - med[None, :, :]), axis=0)
+    mad = np.median(np.abs(stack - med[None, ...]), axis=0)
     sigma = np.maximum(1.4826 * mad, 1e-6)
-    keep = stack >= (bg[None, :, :] - k_sigma * sigma[None, :, :])
+    keep = stack >= (bg[None, ...] - k_sigma * sigma[None, ...])
     num = np.sum(np.where(keep, stack, 0.0), axis=0)
     den = np.sum(keep, axis=0)
     out = np.divide(num, den, out=bg.copy(), where=(den >= min_keep))
@@ -64,6 +67,7 @@ def average_from_frame_iter(
     count = 0
     pending = []
     resolved_dtype = out_dtype
+    expected_shape = None
 
     def flush_pending() -> None:
         nonlocal acc, count, pending, resolved_dtype
@@ -78,6 +82,10 @@ def average_from_frame_iter(
 
     for frame in frames:
         arr = np.asarray(frame)
+        if expected_shape is None:
+            expected_shape = arr.shape
+        elif arr.shape != expected_shape:
+            raise ValueError("All frames must have the same shape")
         if resolved_dtype is None:
             resolved_dtype = arr.dtype
         pending.append(arr)
@@ -92,7 +100,6 @@ def average_from_frame_iter(
     return avg.astype(resolved_dtype), count
 
 
-
 def robust_background_topk(
     frames: Iterable[np.ndarray],
     *,
@@ -102,10 +109,11 @@ def robust_background_topk(
     max_keep: int | None = 96,
     out_dtype: np.dtype = np.uint16,
 ) -> np.ndarray:
-    """Estimate bright background by keeping top-k samples per pixel.
+    """Estimate bright background by keeping top-k samples per element.
 
     This is a low-memory alternative to full-stack quantile/MAD estimation.
-    It is robust to dark occlusions and scales well for long sequences.
+    It supports mono and color frames by flattening each frame then restoring
+    its original shape.
     """
     if frame_count <= 0:
         raise ValueError("frame_count must be > 0")
@@ -118,34 +126,36 @@ def robust_background_topk(
     k_keep = max(1, k_keep)
 
     topk = None
-    rr = cc = None
+    index = None
     loaded = 0
+    shape = None
 
     for frame in frames:
         arr = np.asarray(frame)
-        if arr.ndim != 2:
-            raise ValueError("robust_background_topk currently supports mono frames only")
-        arr_f = arr.astype(np.float32, copy=False)
+        if shape is None:
+            shape = arr.shape
+        elif arr.shape != shape:
+            raise ValueError("All frames must have the same shape")
+        arr_f = arr.astype(np.float32, copy=False).reshape(-1)
 
         if topk is None:
-            h, w = arr_f.shape
-            topk = np.full((k_keep, h, w), -np.inf, dtype=np.float32)
-            rr, cc = np.indices((h, w))
+            topk = np.full((k_keep, arr_f.size), -np.inf, dtype=np.float32)
+            index = np.arange(arr_f.size)
 
         if loaded < k_keep:
             topk[loaded] = arr_f
         else:
             min_idx = np.argmin(topk, axis=0)
-            min_vals = topk[min_idx, rr, cc]
+            min_vals = topk[min_idx, index]
             replace = arr_f > min_vals
             if np.any(replace):
-                topk[min_idx[replace], rr[replace], cc[replace]] = arr_f[replace]
+                topk[min_idx[replace], index[replace]] = arr_f[replace]
         loaded += 1
 
-    if topk is None or loaded == 0:
+    if topk is None or loaded == 0 or shape is None or index is None:
         raise RuntimeError("No frames were provided.")
 
     used = min(loaded, k_keep)
     out = np.mean(topk[:used], axis=0)
     out = np.clip(np.rint(out), 0, np.iinfo(np.uint16).max)
-    return out.astype(out_dtype, copy=False)
+    return out.reshape(shape).astype(out_dtype, copy=False)

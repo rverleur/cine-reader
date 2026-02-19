@@ -20,7 +20,7 @@ from .headers import (
     read_image_offsets,
     read_setup,
 )
-from .image_ops import demosaic_bilinear, replace_dead_pixels_mono
+from .image_ops import demosaic_bilinear, replace_dead_pixels as repair_dead_pixels
 from .stats import average_from_frame_iter, robust_background_mad_stack, robust_background_topk
 from .unpack import unpack_10bit_data
 
@@ -131,6 +131,17 @@ class Cine:
         """Recording calendar date derived from `recording_datetime`."""
         dt = self._recording_datetime
         return dt.date() if dt is not None else None
+
+    @property
+    def cfa_code(self) -> int:
+        """Color Filter Array code from setup metadata."""
+        setup = self._require_camera_setup()
+        return int(getattr(setup, "CFA", 0))
+
+    @property
+    def bayer_pattern(self) -> str | None:
+        """Best-effort Bayer pattern inferred from `camera_setup.CFA`."""
+        return self._resolve_bayer_pattern()
 
     @property
     def image(self) -> np.ndarray:
@@ -284,17 +295,31 @@ class Cine:
             self.pixel_array = self.pixel_array[..., ::-1].copy()
             self.pixel_data = self.pixel_array.reshape(-1)
 
-    def replace_dead_pixels(self, dead_value: int = 4095) -> None:
-        """Replace dead mono pixels using valid 8-neighbor mean.
+    def replace_dead_pixels(
+        self,
+        dead_value: int | None = None,
+        *,
+        dead_is_threshold: bool = True,
+    ) -> None:
+        """Replace dead pixels in mono, Bayer raw, or RGB frames.
 
         Parameters
         ----------
         dead_value:
-            Pixel value to treat as dead sensor sites (common 12-bit marker: 4095).
+            Dead-pixel marker value or threshold. If `None`, inferred from
+            setup metadata (`WhiteLevel + 1` when available, else sensor max).
+        dead_is_threshold:
+            If `True`, repair pixels where value is `>= dead_value`.
+            If `False`, repair pixels where value equals `dead_value`.
         """
-        if self.pixel_array is None:
-            raise RuntimeError("No frame loaded.")
-        self.pixel_array = replace_dead_pixels_mono(self.pixel_array, dead_value=dead_value)
+        frame = self._require_pixel_array()
+        resolved_dead = self._resolve_dead_value(dead_value)
+        self.pixel_array = repair_dead_pixels(
+            frame,
+            dead_value=resolved_dead,
+            dead_is_threshold=dead_is_threshold,
+            bayer_raw=self._is_raw_bayer_frame(frame),
+        )
         self.pixel_data = self.pixel_array.reshape(-1)
 
     def save_frames_to_new_file(self, output_filename: str | Path, start_frame: int, end_frame: int) -> None:
@@ -493,7 +518,7 @@ class Cine:
             out[..., idx] = self._require_pixel_array()
         return out
 
-    def get_frame_rgb(self, image_no: int | None = None, *, bayer_pattern: str = "RGGB") -> np.ndarray:
+    def get_frame_rgb(self, image_no: int | None = None, *, bayer_pattern: str = "auto") -> np.ndarray:
         """Return current or selected frame as RGB.
 
         Parameters
@@ -502,6 +527,7 @@ class Cine:
             Optional global frame number to load before conversion.
         bayer_pattern:
             Bayer layout token for mono demosaic (`RGGB`, `BGGR`, `GRBG`, `GBRG`).
+            Use `"auto"` to infer from setup `CFA`.
 
         Returns
         -------
@@ -515,12 +541,9 @@ class Cine:
         if frame.ndim == 3:
             return frame[..., ::-1].copy()
         if frame.ndim == 2:
-            return demosaic_bilinear(frame, pattern=bayer_pattern)
+            pattern = self._resolve_bayer_pattern(bayer_pattern) or "RGGB"
+            return demosaic_bilinear(frame, pattern=pattern)
         raise ValueError("Unsupported frame shape for RGB conversion")
-
-    def unpack_10bit_data(self, data: bytes) -> np.ndarray:
-        """Expose packed-10 decode helper used internally by frame decode."""
-        return unpack_10bit_data(data)
 
     def _decode_frame(self, raw: bytes) -> np.ndarray:
         image_header = self._require_image_header()
@@ -531,7 +554,7 @@ class Cine:
             width=int(image_header.biWidth),
             height_signed=int(image_header.biHeight),
             real_bpp=int(setup.RealBPP),
-            unpack_10bit_fn=self.unpack_10bit_data,
+            unpack_10bit_fn=unpack_10bit_data,
         )
 
     def _validate_frame_range(self, start_frame: int, end_frame: int) -> tuple[int, int]:
@@ -554,9 +577,57 @@ class Cine:
         replace = self.replace_dead_pixels
         for frame_no in range(start_frame, end_frame + 1):
             load_frame(frame_no)
-            if replace_dead_pixels and self._require_pixel_array().ndim == 2:
+            if replace_dead_pixels:
                 replace()
             yield self._require_pixel_array()
+
+    def _is_raw_bayer_frame(self, frame: np.ndarray) -> bool:
+        """Return True when frame is 2D and setup indicates uninterpolated color."""
+        if frame.ndim != 2:
+            return False
+        image_header = self._require_image_header()
+        if int(image_header.biBitCount) not in (8, 16):
+            return False
+        return self.cfa_code != 0
+
+    def _resolve_bayer_pattern(self, bayer_pattern: str = "auto") -> str | None:
+        """Resolve Bayer pattern from explicit token or setup CFA code."""
+        token = bayer_pattern.upper().strip()
+        if token != "AUTO":
+            if token not in {"RGGB", "BGGR", "GRBG", "GBRG"}:
+                raise ValueError("bayer_pattern must be one of: auto, RGGB, BGGR, GRBG, GBRG")
+            return token
+
+        cfa = self.cfa_code
+        mapping = {
+            0: None,      # CFA_NONE
+            1: "GBRG",    # CFA_VRI (gbrg/rggb variants; best-effort default)
+            2: "BGGR",    # CFA_VRIV6 (bggr/grbg variants; best-effort default)
+            3: "GBRG",    # CFA_BAYER (gb/rg)
+            4: "RGGB",    # CFA_BAYERFLIP (rg/gb)
+            5: "GRBG",    # CFA_BAYERFLIPB (gr/bg variant)
+            6: "BGGR",    # CFA_BAYERFLIPH (bg/gr)
+        }
+        return mapping.get(cfa, None)
+
+    def _resolve_dead_value(self, dead_value: int | None) -> int:
+        """Infer dead-pixel threshold from setup metadata when not provided."""
+        if dead_value is not None:
+            return int(dead_value)
+
+        setup = self._require_camera_setup()
+        white_level = int(getattr(setup, "WhiteLevel", -1))
+        if white_level >= 0:
+            return white_level + 1
+
+        real_bpp = int(getattr(setup, "RealBPP", 0))
+        if real_bpp > 0:
+            return (1 << real_bpp) - 1
+
+        frame = self._require_pixel_array()
+        if np.issubdtype(frame.dtype, np.integer):
+            return int(np.iinfo(frame.dtype).max)
+        return 4095
 
     @staticmethod
     def _decode_recording_datetime(trigger_time: int, recording_tz_minutes: int) -> datetime | None:

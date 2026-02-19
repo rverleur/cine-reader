@@ -32,11 +32,10 @@ def test_open_sample_cine_if_available() -> None:
         avg = cine.average_frames(first, last)
         assert avg.shape == cine.frame.shape
 
-        if cine.frame.ndim == 2:
-            mode_mad = cine.mode_frames(first, last, method="mad")
-            mode_topk = cine.mode_frames(first, last, method="topk")
-            assert mode_mad.shape == cine.frame.shape
-            assert mode_topk.shape == cine.frame.shape
+        mode_mad = cine.mode_frames(first, last, method="mad")
+        mode_topk = cine.mode_frames(first, last, method="topk")
+        assert mode_mad.shape == cine.frame.shape
+        assert mode_topk.shape == cine.frame.shape
 
         assert cine.last_frame_number >= cine.first_frame_number
         assert cine.frame_rate >= 0.0

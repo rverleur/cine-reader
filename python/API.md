@@ -33,11 +33,16 @@ with Cine("sample_data/TrimmedCine.cine") as cine:
 
 ## Image Processing
 
-- `replace_dead_pixels(dead_value=4095)`
-  - `dead_value`: marker value for dead sensor pixels.
-- `get_frame_rgb(image_no=None, bayer_pattern="RGGB")`
+- `replace_dead_pixels(dead_value=None, dead_is_threshold=True)`
+  - `dead_value`: marker/threshold for dead pixels. If `None`, inferred from setup (`WhiteLevel + 1`, then `RealBPP` max).
+  - `dead_is_threshold`: when `True`, treat values `>= dead_value` as dead.
+  - behavior by frame type:
+    - mono 2D: 8-neighbor repair
+    - raw Bayer/CFA 2D: repair each 2x2 phase separately before demosaic
+    - RGB/BGR 3D: repair each channel independently
+- `get_frame_rgb(image_no=None, bayer_pattern="auto")`
   - `image_no`: optional frame number to load first.
-  - `bayer_pattern`: one of `RGGB`, `BGGR`, `GRBG`, `GBRG`.
+  - `bayer_pattern`: `auto` or one of `RGGB`, `BGGR`, `GRBG`, `GBRG`.
 
 ## Statistics
 
@@ -52,6 +57,7 @@ with Cine("sample_data/TrimmedCine.cine") as cine:
   - `min_keep`: minimum accepted samples per pixel.
   - `max_keep`: top-k cap (`topk` mode).
   - `stack_limit`: switch threshold for `auto`.
+  - supports mono and RGB frame stacks.
 
 ## File Utilities
 
@@ -67,6 +73,7 @@ with Cine("sample_data/TrimmedCine.cine") as cine:
 - `frame_rate` -> best available setup frame rate
 - `exposure_time_ns` / `exposure_time_seconds` / `exposure_time`
 - `recording_datetime` / `recording_date`
+- `cfa_code` / `bayer_pattern`
 
 ## Specification-Aligned Metadata Objects
 

@@ -44,11 +44,11 @@ Primary methods use snake_case:
 - `load_frame(image_no, convert_bgr_to_rgb=False)`
 - `next_frame(increment=1, convert_bgr_to_rgb=False)`
 - `close_file()`
-- `replace_dead_pixels(dead_value=4095)`
+- `replace_dead_pixels(dead_value=None, dead_is_threshold=True)`
 - `average_frames(start_frame, end_frame, replace_dead_pixels=False, chunk_size=8)`
 - `mode_frames(start_frame, end_frame, replace_dead_pixels=False, method="auto", q_bg=0.80, k_sigma=2.5, min_keep=3, max_keep=96, stack_limit=128)`
 - `load_frames_batch(start_frame, count)`
-- `get_frame_rgb(image_no=None, bayer_pattern="RGGB")`
+- `get_frame_rgb(image_no=None, bayer_pattern="auto")`
 - `save_frames_to_new_file(output_filename, start_frame, end_frame)`
 
 Top-level aliases for frequently used metadata:
@@ -61,6 +61,8 @@ Top-level aliases for frequently used metadata:
 - `exposure_time_seconds` (alias: `exposure_time`)
 - `recording_datetime`
 - `recording_date`
+- `cfa_code`
+- `bayer_pattern`
 - `image` / `frame` (aliases for latest pixel array)
 
 Specification-aligned metadata blocks remain available:
@@ -88,6 +90,13 @@ For large frame ranges:
 - Keep `replace_dead_pixels=False` unless dead-pixel correction is required.
 - Reuse the same `Cine` object for repeated operations.
 - Tune `average_frames(..., chunk_size=...)` for your memory/CPU balance.
+- `mode_frames` now works on both mono and RGB frame stacks.
+
+Dead-pixel handling follows the CINE format guidance:
+
+- raw color (CFA/Bayer) cines are repaired in software by phase-aware correction (2x2 CFA split)
+- interpolated color cines can be repaired channel-wise if needed
+- mono cines use standard 8-neighbor repair
 
 `mode_frames` options:
 

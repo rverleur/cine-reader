@@ -5,30 +5,22 @@ from __future__ import annotations
 import numpy as np
 
 
+def _dead_mask(frame: np.ndarray, dead_value: int, *, dead_is_threshold: bool) -> np.ndarray:
+    if dead_is_threshold:
+        return frame >= dead_value
+    return frame == dead_value
 
-def replace_dead_pixels_mono(frame: np.ndarray, dead_value: int = 4095) -> np.ndarray:
-    """Replace dead pixels in a mono frame using valid 8-neighbor mean.
 
-    Parameters
-    ----------
-    frame:
-        2D mono image.
-    dead_value:
-        Pixel value marking dead sensor sites.
-
-    Returns
-    -------
-    numpy.ndarray
-        Corrected frame with same dtype as input.
-    """
+def _replace_dead_pixels_mono_mask(frame: np.ndarray, dead_mask: np.ndarray) -> np.ndarray:
+    """Replace dead pixels in a 2D image from a precomputed dead-pixel mask."""
     if frame.ndim != 2:
         return frame
-
-    frame_f = frame.astype(np.float32, copy=False)
-    dead_mask = frame == dead_value
+    if dead_mask.shape != frame.shape:
+        raise ValueError("dead_mask must have the same shape as frame")
     if not np.any(dead_mask):
         return frame
 
+    frame_f = frame.astype(np.float32, copy=False)
     valid = ~dead_mask
     values = np.where(valid, frame_f, 0.0)
     valid_i = valid.astype(np.int16)
@@ -52,6 +44,112 @@ def replace_dead_pixels_mono(frame: np.ndarray, dead_value: int = 4095) -> np.nd
     out[replace_mask] = nbr_sum[replace_mask] / nbr_cnt[replace_mask]
     return out.astype(frame.dtype, copy=False)
 
+
+def replace_dead_pixels_mono(
+    frame: np.ndarray,
+    dead_value: int = 4095,
+    *,
+    dead_is_threshold: bool = False,
+) -> np.ndarray:
+    """Replace dead pixels in a mono frame using valid 8-neighbor mean.
+
+    Parameters
+    ----------
+    frame:
+        2D mono image.
+    dead_value:
+        Dead-pixel marker value or threshold.
+    dead_is_threshold:
+        If `False`, dead pixels are `frame == dead_value`.
+        If `True`, dead pixels are `frame >= dead_value`.
+    """
+    if frame.ndim != 2:
+        return frame
+    mask = _dead_mask(frame, dead_value, dead_is_threshold=dead_is_threshold)
+    return _replace_dead_pixels_mono_mask(frame, mask)
+
+
+def replace_dead_pixels_bayer(
+    frame: np.ndarray,
+    dead_value: int = 4095,
+    *,
+    dead_is_threshold: bool = False,
+) -> np.ndarray:
+    """Repair dead pixels in raw Bayer/CFA frame by processing each 2x2 phase separately.
+
+    This follows the CINE guidance for raw color cines: bad pixels are not repaired in
+    camera output and should be repaired in software before demosaic. Splitting by 2x2
+    phase preserves color consistency of the CFA mosaic.
+    """
+    if frame.ndim != 2:
+        return frame
+
+    out = frame.copy()
+    for row_phase in (0, 1):
+        for col_phase in (0, 1):
+            sub = frame[row_phase::2, col_phase::2]
+            mask = _dead_mask(sub, dead_value, dead_is_threshold=dead_is_threshold)
+            out[row_phase::2, col_phase::2] = _replace_dead_pixels_mono_mask(sub, mask)
+    return out
+
+
+def replace_dead_pixels_rgb(
+    frame: np.ndarray,
+    dead_value: int = 4095,
+    *,
+    dead_is_threshold: bool = False,
+) -> np.ndarray:
+    """Repair dead pixels per channel in RGB/BGR image data."""
+    if frame.ndim != 3:
+        return frame
+    if frame.shape[-1] <= 1:
+        return frame.reshape(frame.shape[:2])
+
+    out = frame.copy()
+    for ch in range(frame.shape[-1]):
+        channel = frame[..., ch]
+        mask = _dead_mask(channel, dead_value, dead_is_threshold=dead_is_threshold)
+        out[..., ch] = _replace_dead_pixels_mono_mask(channel, mask)
+    return out
+
+
+def replace_dead_pixels(
+    frame: np.ndarray,
+    *,
+    dead_value: int = 4095,
+    dead_is_threshold: bool = False,
+    bayer_raw: bool = False,
+) -> np.ndarray:
+    """Dispatch dead-pixel repair for mono, Bayer raw, and RGB data.
+
+    Parameters
+    ----------
+    frame:
+        Input image array (2D mono/Bayer or 3D RGB/BGR).
+    dead_value:
+        Dead-pixel marker value or threshold.
+    dead_is_threshold:
+        If `True`, treat values `>= dead_value` as dead.
+    bayer_raw:
+        If `True` and `frame` is 2D, process as CFA mosaic by 2x2 phase.
+    """
+    if frame.ndim == 3:
+        return replace_dead_pixels_rgb(
+            frame,
+            dead_value=dead_value,
+            dead_is_threshold=dead_is_threshold,
+        )
+    if frame.ndim == 2 and bayer_raw:
+        return replace_dead_pixels_bayer(
+            frame,
+            dead_value=dead_value,
+            dead_is_threshold=dead_is_threshold,
+        )
+    return replace_dead_pixels_mono(
+        frame,
+        dead_value=dead_value,
+        dead_is_threshold=dead_is_threshold,
+    )
 
 
 def demosaic_bilinear(frame: np.ndarray, pattern: str = "RGGB") -> np.ndarray:
