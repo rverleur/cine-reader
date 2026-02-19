@@ -1,475 +1,341 @@
-"""Reader for Vision Research Phantom `.cine` files."""
+"""High-level Phantom CINE reader with pythonic APIs and documented aliases."""
 
 from __future__ import annotations
 
 import struct
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import BinaryIO, Iterator
 
 import numpy as np
 
 from .frame_decode import decode_frame_payload
+from .headers import (
+    BitmapHeader,
+    CineHeader,
+    ImageOffsets,
+    Setup,
+    read_bitmap_header,
+    read_cine_header,
+    read_image_offsets,
+    read_setup,
+)
 from .image_ops import demosaic_bilinear, replace_dead_pixels_mono
 from .stats import average_from_frame_iter, robust_background_mad_stack, robust_background_topk
 from .unpack import unpack_10bit_data
 
 
 class Cine:
-    """High-level reader for Phantom `.cine` files."""
+    """High-level reader for Vision Research Phantom `.cine` files.
+
+    Notes
+    -----
+    Metadata field names inside `file_header`, `image_header`, and `camera_setup`
+    follow the CINE specification naming (CamelCase / `bi*` fields). Python-facing
+    methods and top-level aliases use snake_case.
+    """
 
     def __init__(self, filename: str | Path, keep_annotations: bool = True):
+        """Create and open a CINE file reader.
+
+        Parameters
+        ----------
+        filename:
+            Path to the `.cine` file.
+        keep_annotations:
+            If `True`, keep per-frame annotation payload bytes available in
+            `annotation_data` and `annotation`.
+        """
         self.filename = str(filename)
         self.keep_annotations = bool(keep_annotations)
-        self.file = None
-        self.OpenCineFile(self.filename)
 
-    def __enter__(self):
+        self.file_handle: BinaryIO | None = None
+        self.file_header: CineHeader | None = None
+        self.image_header: BitmapHeader | None = None
+        self.camera_setup: Setup | None = None
+        self.image_locations: ImageOffsets | None = None
+
+        self.current_frame: int | None = None
+        self.pixel_array: np.ndarray | None = None
+        self.pixel_data: np.ndarray | None = None
+        self.annotation_size: int = 0
+        self.annotation_data: bytes = b""
+        self.annotation: bytes = b""
+        self.image_size: int = 0
+        self.image_data: bytes = b""
+
+        self._recording_datetime: datetime | None = None
+
+        self.open_cine_file(self.filename)
+
+    def __enter__(self) -> "Cine":
         return self
 
-    def __exit__(self, exc_type, exc, tb):
-        self.CloseFile()
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.close_file()
         return False
 
-    def __del__(self):
+    def __del__(self) -> None:
         try:
-            self.CloseFile()
+            self.close_file()
         except Exception:
             pass
 
-    def OpenCineFile(self, filename):
-        """Open a cine file and parse all headers."""
+    @property
+    def first_frame_number(self) -> int:
+        """Alias for `file_header.FirstImageNo`."""
+        header = self._require_file_header()
+        return int(header.FirstImageNo)
+
+    @property
+    def total_frames(self) -> int:
+        """Alias for `file_header.ImageCount`."""
+        header = self._require_file_header()
+        return int(header.ImageCount)
+
+    @property
+    def last_frame_number(self) -> int:
+        """Derived final frame number (`FirstImageNo + ImageCount - 1`)."""
+        return self.first_frame_number + self.total_frames - 1
+
+    @property
+    def frame_rate(self) -> float:
+        """Best available frame rate in Hz (prefers floating-point setup value)."""
+        setup = self._require_camera_setup()
+        return setup.frame_rate_hz
+
+    @property
+    def exposure_time_ns(self) -> int:
+        """Best available exposure time in nanoseconds."""
+        setup = self._require_camera_setup()
+        return setup.exposure_time_ns
+
+    @property
+    def exposure_time_seconds(self) -> float:
+        """Best available exposure time in seconds."""
+        setup = self._require_camera_setup()
+        return setup.exposure_time_seconds
+
+    @property
+    def exposure_time(self) -> float:
+        """Alias for `exposure_time_seconds`."""
+        return self.exposure_time_seconds
+
+    @property
+    def recording_datetime(self) -> datetime | None:
+        """Recording timestamp derived from `TriggerTime` and setup timezone."""
+        return self._recording_datetime
+
+    @property
+    def recording_date(self) -> date | None:
+        """Recording calendar date derived from `recording_datetime`."""
+        dt = self._recording_datetime
+        return dt.date() if dt is not None else None
+
+    @property
+    def image(self) -> np.ndarray:
+        """Alias for latest decoded frame array (`pixel_array`)."""
+        arr = self.pixel_array
+        if arr is None:
+            raise RuntimeError("No frame loaded.")
+        return arr
+
+    @image.setter
+    def image(self, value: np.ndarray) -> None:
+        self.pixel_array = np.asarray(value)
+        self.pixel_data = self.pixel_array.reshape(-1)
+
+    @property
+    def frame(self) -> np.ndarray:
+        """Alias for latest decoded frame array (`pixel_array`)."""
+        return self.image
+
+    @frame.setter
+    def frame(self, value: np.ndarray) -> None:
+        self.image = value
+
+    def open_cine_file(self, filename: str | Path) -> None:
+        """Open a CINE file and parse all top-level metadata blocks.
+
+        Parameters
+        ----------
+        filename:
+            Path to the CINE file to open.
+        """
         self.filename = str(filename)
-        self.CloseFile()
-        self.file = open(filename, mode='rb')
-        self.FileHeader = self.CineHeader(self)
-        self.ImageHeader = self.BitmapHeader(self)
-        self.CameraSetup = self.Setup(self)
-        self.ImageLocations = self.ImageOffsets(self)
-        self.CurrentFrame = self.FileHeader.FirstImageNo
-        self.LoadFrame(self.CurrentFrame)
+        self.close_file()
+        self.file_handle = open(self.filename, mode="rb")
+        try:
+            self.file_header = read_cine_header(self.file_handle)
+            self.image_header = read_bitmap_header(
+                self.file_handle,
+                off_image_header=int(self.file_header.OffImageHeader),
+            )
+            self.camera_setup = read_setup(
+                self.file_handle,
+                off_setup=int(self.file_header.OffSetup),
+                off_image_offsets=int(self.file_header.OffImageOffsets),
+            )
+            self.image_locations = read_image_offsets(
+                self.file_handle,
+                off_image_offsets=int(self.file_header.OffImageOffsets),
+                image_count=int(self.file_header.ImageCount),
+                version=int(self.file_header.Version),
+            )
+            self._recording_datetime = self._decode_recording_datetime(
+                trigger_time=int(self.file_header.TriggerTime),
+                recording_tz_minutes=int(self.camera_setup.RecordingTimeZone),
+            )
+            self.current_frame = int(self.file_header.FirstImageNo)
+            self.load_frame(self.current_frame)
+        except Exception:
+            self.close_file()
+            raise
 
-    def NextFrame(self, increment=1):
-        """Load the next frame (or offset by `increment`)."""
-        self.CurrentFrame += increment
-        self.LoadFrame(self.CurrentFrame)
+    def close_file(self) -> None:
+        """Close the active CINE file handle."""
+        if self.file_handle is not None and not self.file_handle.closed:
+            self.file_handle.close()
+        self.file_handle = None
 
-    def _decode_frame(self, raw: bytes) -> np.ndarray:
-        return decode_frame_payload(
-            raw,
-            bit_count=int(self.ImageHeader.biBitCount),
-            width=int(self.ImageHeader.biWidth),
-            height_signed=int(self.ImageHeader.biHeight),
-            real_bpp=int(self.CameraSetup.RealBPP),
-            unpack_10bit_fn=self.unpack_10bit_data,
-        )
+    def next_frame(self, increment: int = 1, *, convert_bgr_to_rgb: bool = False) -> None:
+        """Load the next frame relative to `current_frame`.
 
-    def LoadFrame(self, ImageNo, convert_bgr_to_rgb=False):
-        """Load a single frame into `self.PixelArray`."""
-        first = int(self.FileHeader.FirstImageNo)
-        count = int(self.FileHeader.ImageCount)
-        index = int(ImageNo) - first
+        Parameters
+        ----------
+        increment:
+            Number of frame numbers to advance (negative values are allowed).
+        convert_bgr_to_rgb:
+            If `True` and data is 3-channel, convert BGR payload order to RGB.
+        """
+        if self.current_frame is None:
+            raise RuntimeError("No current frame is set.")
+        self.load_frame(self.current_frame + int(increment), convert_bgr_to_rgb=convert_bgr_to_rgb)
+
+    def load_frame(self, image_no: int, *, convert_bgr_to_rgb: bool = False) -> None:
+        """Load one frame into `pixel_array`.
+
+        Parameters
+        ----------
+        image_no:
+            Global frame number (`FirstImageNo .. last_frame_number`) as defined
+            by the CINE header table.
+        convert_bgr_to_rgb:
+            If `True`, convert 3-channel frame data from BGR to RGB.
+        """
+        handle = self._require_file_handle()
+        header = self._require_file_header()
+        offsets = self._require_image_locations().pImage
+
+        first = int(header.FirstImageNo)
+        count = int(header.ImageCount)
+        index = int(image_no) - first
         if index < 0 or index >= count:
-            raise IndexError("ImageNo is out of bounds")
+            raise IndexError("image_no is out of bounds")
 
-        self.CurrentFrame = int(ImageNo)
-        start = int(self.ImageLocations.pImage[index])
-        stop = int(self.ImageLocations.pImage[index + 1])
+        self.current_frame = int(image_no)
+        start = int(offsets[index])
+        stop = int(offsets[index + 1])
 
-        self.file.seek(start, 0)
-        self.AnnotationSize = int.from_bytes(self.file.read(4), "little", signed=False)
-        self.file.seek(start, 0)
-        annotation = self.file.read(self.AnnotationSize)
-        if len(annotation) != self.AnnotationSize:
-            raise EOFError("Unexpected EOF while reading annotation block")
+        handle.seek(start, 0)
+        ann_size_raw = handle.read(4)
+        if len(ann_size_raw) != 4:
+            raise EOFError("Unexpected EOF while reading annotation size")
+        annotation_size = int.from_bytes(ann_size_raw, "little", signed=False)
+        self.annotation_size = annotation_size
 
         if self.keep_annotations:
-            self.AnnotationData = annotation
-            self.Annotation = self.AnnotationData[4:self.AnnotationSize - 4]
-        else:
-            self.AnnotationData = b""
-            self.Annotation = b""
-
-        if self.AnnotationSize >= 4:
-            self.ImageSize = int.from_bytes(annotation[self.AnnotationSize - 4:self.AnnotationSize], "little", signed=False)
-        else:
-            self.ImageSize = 0
-
-        frame_size_from_offsets = max(0, stop - start - self.AnnotationSize)
-        if frame_size_from_offsets and (self.ImageSize == 0 or self.ImageSize > frame_size_from_offsets):
-            self.ImageSize = frame_size_from_offsets
-
-        self.ImageData = self.file.read(self.ImageSize)
-        if len(self.ImageData) != self.ImageSize:
-            raise EOFError("Unexpected EOF while reading frame payload")
-
-        self.PixelArray = self._decode_frame(self.ImageData)
-        self.PixelData = self.PixelArray.reshape(-1)
-
-        if convert_bgr_to_rgb and self.PixelArray.ndim == 3:
-            self.PixelArray = self.PixelArray[..., ::-1].copy()
-            self.PixelData = self.PixelArray.reshape(-1)
-
-    def ReplaceDeadPixels(self, dead_value=4095):
-        """Replace dead pixels with the mean of valid 8-neighbors (mono frames)."""
-        self.PixelArray = replace_dead_pixels_mono(self.PixelArray, dead_value=dead_value)
-        self.PixelData = self.PixelArray.reshape(-1)
-
-    def unpack_10bit_data(self, data):
-        """Unpack Phantom packed 10-bit payload to `uint16`."""
-        return unpack_10bit_data(data)
-
-    def CloseFile(self):
-        """Close the current cine file handle."""
-        if self.file is not None and not self.file.closed:
-            self.file.close()
-        self.file = None
-
-    class CineHeader(object):
-        """
-        Represents the header information of a cine file.
-
-        Reads in the first 44 bytes of the file header and interprets various parameters.
-        """
-
-        def __init__(self, Cine):
-            """
-            Initialize the CineHeader by reading header data from the file.
-
-            Parameters:
-                Cine (Cine): The Cine object containing the open file.
-            """
-            self.FileHeaderData = Cine.file.read(44)
-            self.Type = self.FileHeaderData[0:2]
-            self.Headersize = int.from_bytes(self.FileHeaderData[2:4], "little", signed=False)  # 16-bit header size
-            self.Compression = int.from_bytes(self.FileHeaderData[4:6], "little", signed=False)
-            self.Version = int.from_bytes(self.FileHeaderData[6:8], "little", signed=False)
-            self.FirstMovieImage = int.from_bytes(self.FileHeaderData[8:12], "little", signed=True)
-            self.TotalImageCount = int.from_bytes(self.FileHeaderData[12:16], "little", signed=False)
-            self.FirstImageNo = int.from_bytes(self.FileHeaderData[16:20], "little", signed=True)
-            self.ImageCount = int.from_bytes(self.FileHeaderData[20:24], "little", signed=False)
-            self.OffImageHeader = int.from_bytes(self.FileHeaderData[24:28], "little", signed=False)
-            self.OffSetup = int.from_bytes(self.FileHeaderData[28:32], "little", signed=False)
-            self.OffImageOffsets = int.from_bytes(self.FileHeaderData[32:36], "little", signed=False)
-            self.TriggerTime = int.from_bytes(self.FileHeaderData[36:44], "little", signed=False)
-
-    class BitmapHeader(object):
-        """
-        Represents the bitmap (image) header from the cine file.
-
-        Reads in 40 bytes from the file starting at the offset given by the file header.
-        """
-
-        def __init__(self, Cine):
-            """
-            Initialize the BitmapHeader by reading image header data.
-
-            Parameters:
-                Cine (Cine): The Cine object containing the open file.
-            """
-            Cine.file.seek(Cine.FileHeader.OffImageHeader, 0)  # Seek to start of bitmap info header
-            self.ImageHeaderData = Cine.file.read(40)
-            self.biSize = int.from_bytes(self.ImageHeaderData[0:4], "little", signed=False)
-            self.biWidth = int.from_bytes(self.ImageHeaderData[4:8], "little", signed=True)
-            self.biHeight = int.from_bytes(self.ImageHeaderData[8:12], "little", signed=True)
-            self.biPlanes = int.from_bytes(self.ImageHeaderData[12:14], "little", signed=False)
-            self.biBitCount = int.from_bytes(self.ImageHeaderData[14:16], "little", signed=False)
-            self.biCompression = int.from_bytes(self.ImageHeaderData[16:20], "little", signed=False)
-            self.biSizeImage = int.from_bytes(self.ImageHeaderData[20:24], "little", signed=False)
-            self.biXPelsPerMeter = int.from_bytes(self.ImageHeaderData[24:28], "little", signed=True)
-            self.biYPelsPerMeter = int.from_bytes(self.ImageHeaderData[28:32], "little", signed=True)
-            self.biClrUsed = int.from_bytes(self.ImageHeaderData[32:36], "little", signed=False)
-            self.biClrImportant = int.from_bytes(self.ImageHeaderData[36:40], "little", signed=False)
-
-    class ImageOffsets(object):
-        """
-        Represents the offsets for each image frame in the cine file.
-
-        Reads the image offset table and stores offsets in an array.
-        """
-
-        def __init__(self, Cine):
-            """
-            Initialize ImageOffsets by reading offset data from the cine file.
-
-            Parameters:
-                Cine (Cine): The Cine object containing the open file.
-
-            Raises:
-                Exception: If the file version is invalid.
-            """
-            Cine.file.seek(Cine.FileHeader.OffImageOffsets, 0)
-            if Cine.FileHeader.Version == 0:
-                self.pImageData = Cine.file.read(Cine.FileHeader.ImageCount * 4)
-                self.pImage = np.frombuffer(self.pImageData, dtype="<u4").astype(np.uint64, copy=False)
-            elif Cine.FileHeader.Version == 1:
-                self.pImageData = Cine.file.read(Cine.FileHeader.ImageCount * 8)
-                self.pImage = np.frombuffer(self.pImageData, dtype="<u8").astype(np.uint64, copy=False)
+            handle.seek(start, 0)
+            annotation_data = handle.read(annotation_size)
+            if len(annotation_data) != annotation_size:
+                raise EOFError("Unexpected EOF while reading annotation block")
+            self.annotation_data = annotation_data
+            if annotation_size >= 8:
+                self.annotation = annotation_data[4:annotation_size - 4]
             else:
-                raise Exception("File Version is Invalid")
-            Cine.file.seek(0, 2)
-            file_size = np.uint64(Cine.file.tell())
-            self.pImage = np.concatenate((self.pImage, np.array([file_size], dtype=np.uint64)))
+                self.annotation = b""
+            image_size = int.from_bytes(annotation_data[-4:], "little", signed=False) if annotation_size >= 4 else 0
+            handle.seek(start + annotation_size, 0)
+        else:
+            self.annotation_data = b""
+            self.annotation = b""
+            image_size = 0
+            if annotation_size >= 4:
+                handle.seek(start + annotation_size - 4, 0)
+                tail_size = handle.read(4)
+                if len(tail_size) == 4:
+                    image_size = int.from_bytes(tail_size, "little", signed=False)
+            handle.seek(start + annotation_size, 0)
 
-    class Setup(object):
+        frame_size_from_offsets = max(0, stop - start - annotation_size)
+        if frame_size_from_offsets and (image_size == 0 or image_size > frame_size_from_offsets):
+            image_size = frame_size_from_offsets
+        self.image_size = image_size
+
+        image_data = handle.read(image_size)
+        if len(image_data) != image_size:
+            raise EOFError("Unexpected EOF while reading frame payload")
+        self.image_data = image_data
+
+        self.pixel_array = self._decode_frame(image_data)
+        self.pixel_data = self.pixel_array.reshape(-1)
+
+        if convert_bgr_to_rgb and self.pixel_array.ndim == 3:
+            self.pixel_array = self.pixel_array[..., ::-1].copy()
+            self.pixel_data = self.pixel_array.reshape(-1)
+
+    def replace_dead_pixels(self, dead_value: int = 4095) -> None:
+        """Replace dead mono pixels using valid 8-neighbor mean.
+
+        Parameters
+        ----------
+        dead_value:
+            Pixel value to treat as dead sensor sites (common 12-bit marker: 4095).
         """
-        Represents the camera setup information contained in the cine file.
+        if self.pixel_array is None:
+            raise RuntimeError("No frame loaded.")
+        self.pixel_array = replace_dead_pixels_mono(self.pixel_array, dead_value=dead_value)
+        self.pixel_data = self.pixel_array.reshape(-1)
 
-        Reads the setup data block and parses various camera parameters and metadata.
+    def save_frames_to_new_file(self, output_filename: str | Path, start_frame: int, end_frame: int) -> None:
+        """Write a trimmed CINE file for frame range `[start_frame, end_frame]`.
+
+        Parameters
+        ----------
+        output_filename:
+            Output path for the new CINE file.
+        start_frame:
+            First global frame number to include.
+        end_frame:
+            Last global frame number to include (inclusive).
         """
+        handle = self._require_file_handle()
+        header = self._require_file_header()
+        image_header = self._require_image_header()
+        setup = self._require_camera_setup()
+        offsets = self._require_image_locations().pImage
 
-        def __init__(self, Cine):
-            """
-            Initialize the Setup by reading and parsing setup data from the file.
-
-            Parameters:
-                Cine (Cine): The Cine object containing the open file.
-            """
-            Cine.file.seek(Cine.FileHeader.OffSetup + 22 + 120, 0)  # Seek to location of length parameter in setup file
-            self.Length = int.from_bytes(Cine.file.read(2), "little", signed=False)
-            Cine.file.seek(Cine.FileHeader.OffSetup, 0)
-            self.SetupData = Cine.file.read(Cine.FileHeader.OffImageOffsets - Cine.FileHeader.OffSetup)
-            decode_text = lambda b: b.split(b"\x00", 1)[0].decode("utf-8", errors="ignore").strip()
-            self.FrameRate16 = int.from_bytes(self.SetupData[0:2], "little", signed=False)
-            self.Shutter16 = int.from_bytes(self.SetupData[2:4], "little", signed=False)
-            self.PostTrigger16 = int.from_bytes(self.SetupData[4:6], "little", signed=False)
-            self.FrameDelay16 = int.from_bytes(self.SetupData[6:8], "little", signed=False)
-            self.AspectRatio = int.from_bytes(self.SetupData[8:10], "little", signed=False)
-            self.Res7 = int.from_bytes(self.SetupData[10:12], "little", signed=False)
-            self.Res8 = int.from_bytes(self.SetupData[12:14], "little", signed=False)
-            self.Res9 = int.from_bytes(self.SetupData[14:15], "little", signed=False)
-            self.Res10 = int.from_bytes(self.SetupData[15:16], "little", signed=False)
-            self.Res11 = int.from_bytes(self.SetupData[16:17], "little", signed=False)
-            self.TrigFrame = int.from_bytes(self.SetupData[17:18], "little", signed=False)
-            self.Res12 = int.from_bytes(self.SetupData[18:19], "little", signed=False)
-            self.DescriptionOld = self.SetupData[19:140]
-            self.Mark = self.SetupData[140:142]
-            self.Length = int.from_bytes(self.SetupData[142:144], "little", signed=False)
-            self.Res13 = int.from_bytes(self.SetupData[144:146], "little", signed=False)
-            self.SigOption = int.from_bytes(self.SetupData[146:148], "little", signed=False)
-            self.BinChannels = int.from_bytes(self.SetupData[148:150], "little", signed=True)
-            self.SamplesPerImage = int.from_bytes(self.SetupData[150:151], "little", signed=False)
-            self.BinName = [self.SetupData[151 + 11 * a:162 + 11 * a] for a in range(8)]
-            self.AnaOption = int.from_bytes(self.SetupData[239:241], "little", signed=False)
-            self.AnaChannels = int.from_bytes(self.SetupData[241:243], "little", signed=True)
-            self.Res6 = int.from_bytes(self.SetupData[243:244], "little", signed=False)
-            self.AnaBoard = int.from_bytes(self.SetupData[244:245], "little", signed=False)
-            self.ChOption = [int.from_bytes(self.SetupData[245 + 2 * a:247 + 2 * a], "little", signed=False) for a in
-                             range(8)]
-            self.AnaGain = [struct.unpack('f', self.SetupData[261 + 4 * a:265 + 4 * a])[0] for a in range(8)]
-            self.AnaUnit = [self.SetupData[293 + 6 * a:299 + 6 * a] for a in range(8)]
-            self.AnaName = [self.SetupData[341 + 11 * a:352 + 11 * a] for a in range(8)]
-            self.lFirstImage = int.from_bytes(self.SetupData[429:433], "little", signed=True)
-            self.dwImageCount = int.from_bytes(self.SetupData[433:437], "little", signed=False)
-            self.nQFactor = int.from_bytes(self.SetupData[437:439], "little", signed=True)
-            self.wCineFileType = int.from_bytes(self.SetupData[439:441], "little", signed=False)
-            self.szCinePath = [self.SetupData[441 + 65 * a:506 + 65 * a] for a in range(4)]
-            self.Res14 = int.from_bytes(self.SetupData[701:703], "little", signed=False)
-            self.Res15 = int.from_bytes(self.SetupData[703:704], "little", signed=False)
-            self.Res16 = int.from_bytes(self.SetupData[704:705], "little", signed=False)
-            self.Res17 = int.from_bytes(self.SetupData[705:707], "little", signed=False)
-            self.Res18 = int.from_bytes(self.SetupData[707:715], "little", signed=False)
-            self.Res19 = int.from_bytes(self.SetupData[715:723], "little", signed=False)
-            self.Res20 = int.from_bytes(self.SetupData[723:725], "little", signed=False)
-            self.Res1 = int.from_bytes(self.SetupData[725:729], "little", signed=False)
-            self.Res2 = int.from_bytes(self.SetupData[729:733], "little", signed=False)
-            self.Res3 = int.from_bytes(self.SetupData[733:737], "little", signed=False)
-            self.ImWidth = int.from_bytes(self.SetupData[737:739], "little", signed=False)
-            self.ImHeight = int.from_bytes(self.SetupData[739:741], "little", signed=False)
-            self.EDRShutter16 = int.from_bytes(self.SetupData[741:743], "little", signed=False)
-            self.Serial = int.from_bytes(self.SetupData[743:747], "little", signed=False)
-            self.Saturation = int.from_bytes(self.SetupData[747:751], "little", signed=True)
-            self.Res5 = int.from_bytes(self.SetupData[751:752], "little", signed=False)
-            self.AutoExposure = int.from_bytes(self.SetupData[752:756], "little", signed=False)
-            self.bFlipH = bool(int.from_bytes(self.SetupData[756:760], "little", signed=False))
-            self.bFlipV = bool(int.from_bytes(self.SetupData[760:764], "little", signed=False))
-            self.Grid = int.from_bytes(self.SetupData[764:768], "little", signed=False)
-            self.FrameRate = int.from_bytes(self.SetupData[768:772], "little", signed=False)
-            self.Shutter = int.from_bytes(self.SetupData[772:776], "little", signed=False)
-            self.EDRSshutter = int.from_bytes(self.SetupData[776:780], "little", signed=False)
-            self.PostTrigger = int.from_bytes(self.SetupData[780:784], "little", signed=False)
-            self.FrameDelay = int.from_bytes(self.SetupData[784:788], "little", signed=False)
-            self.bEnableColor = bool(int.from_bytes(self.SetupData[788:792], "little", signed=False))
-            self.CameraVersion = int.from_bytes(self.SetupData[792:796], "little", signed=False)
-            self.FirmwareVersion = int.from_bytes(self.SetupData[796:800], "little", signed=False)
-            self.SoftwareVersion = int.from_bytes(self.SetupData[800:804], "little", signed=False)
-            self.RecordingTimeZone = int.from_bytes(self.SetupData[804:808], "little", signed=True)
-            self.CFA = int.from_bytes(self.SetupData[808:812], "little", signed=False)
-            self.Bright = int.from_bytes(self.SetupData[812:816], "little", signed=True)
-            self.Contrast = int.from_bytes(self.SetupData[816:820], "little", signed=True)
-            self.Gamma = int.from_bytes(self.SetupData[820:824], "little", signed=True)
-            self.Res21 = int.from_bytes(self.SetupData[824:828], "little", signed=False)
-            self.AutoExpLevel = int.from_bytes(self.SetupData[828:832], "little", signed=False)
-            self.AutoExpSpeed = int.from_bytes(self.SetupData[832:836], "little", signed=False)
-            self.AutoExpRect = [
-                [int.from_bytes(self.SetupData[836 + 4 * a + 8 * b:840 + 4 * a + 8 * b], "little", signed=False) for a
-                 in range(2)] for b in range(2)]
-            self.WBGain = [
-                [struct.unpack('f', self.SetupData[852 + 4 * b + 8 * a:856 + 4 * b + 8 * a])[0] for b in range(2)] for a
-                in range(4)]
-            self.Rotate = int.from_bytes(self.SetupData[884:888], "little", signed=True)
-            self.WBView = [struct.unpack('f', self.SetupData[888 + 4 * b:892 + 4 * b])[0] for b in range(2)]
-            self.RealBPP = int.from_bytes(self.SetupData[896:900], "little", signed=False)
-            self.Conv8Min = int.from_bytes(self.SetupData[900:904], "little", signed=False)
-            self.Conv8Max = int.from_bytes(self.SetupData[904:908], "little", signed=False)
-            self.FilterCode = int.from_bytes(self.SetupData[908:912], "little", signed=True)
-            self.FilterParam = int.from_bytes(self.SetupData[912:916], "little", signed=True)
-            self.UF = [int.from_bytes(self.SetupData[916:920], "little", signed=True),
-                       int.from_bytes(self.SetupData[920:924], "little", signed=True),
-                       int.from_bytes(self.SetupData[924:928], "little", signed=True),
-                       [int.from_bytes(self.SetupData[928 + a * 4:932 + a * 4], "little", signed=True) for a in
-                        range(5 * 5)]]
-            self.BlackCalSVer = int.from_bytes(self.SetupData[1028:1032], "little", signed=False)
-            self.WhiteCalSVer = int.from_bytes(self.SetupData[1032:1036], "little", signed=False)
-            self.GrayCalSVer = int.from_bytes(self.SetupData[1036:1040], "little", signed=False)
-            self.bStampTime = bool(int.from_bytes(self.SetupData[1040:1044], "little", signed=False))
-            self.SoundDest = int.from_bytes(self.SetupData[1044:1048], "little", signed=False)
-            self.FRPSteps = int.from_bytes(self.SetupData[1048:1052], "little", signed=False)
-            self.FRPImgNr = [int.from_bytes(self.SetupData[1052 + 4 * a:1056 + 4 * a], "little", signed=True) for a in
-                             range(16)]
-            self.FRPRate = [int.from_bytes(self.SetupData[1116 + 4 * a:1120 + 4 * a], "little", signed=False) for a in
-                            range(16)]
-            self.FRPExp = [int.from_bytes(self.SetupData[1180 + 4 * a:1184 + 4 * a], "little", signed=False) for a in
-                           range(16)]
-            self.MCCnt = int.from_bytes(self.SetupData[1244:1248], "little", signed=True)
-            self.MCPercent = [struct.unpack('f', self.SetupData[1248 + 4 * a:1252 + 4 * a])[0] for a in range(64)]
-            self.CICalib = int.from_bytes(self.SetupData[1504:1508], "little", signed=False)
-            self.CalibWidth = int.from_bytes(self.SetupData[1508:1512], "little", signed=False)
-            self.CalibHeight = int.from_bytes(self.SetupData[1512:1516], "little", signed=False)
-            self.CalibRate = int.from_bytes(self.SetupData[1516:1520], "little", signed=False)
-            self.CalibExp = int.from_bytes(self.SetupData[1520:1524], "little", signed=False)
-            self.CalibEDR = int.from_bytes(self.SetupData[1524:1528], "little", signed=False)
-            self.CalibTemp = int.from_bytes(self.SetupData[1528:1532], "little", signed=False)
-            self.HeadSerial = [int.from_bytes(self.SetupData[1532 + 4 * a:1536 + 4 * a], "little", signed=False) for a
-                               in range(4)]
-            self.RangeCode = int.from_bytes(self.SetupData[1548:1552], "little", signed=False)
-            self.RangeSize = int.from_bytes(self.SetupData[1552:1556], "little", signed=False)
-            self.Decimation = int.from_bytes(self.SetupData[1556:1560], "little", signed=False)
-            self.MasterSerial = int.from_bytes(self.SetupData[1560:1564], "little", signed=False)
-            self.Sensor = int.from_bytes(self.SetupData[1564:1568], "little", signed=False)
-            self.ShutterNs = int.from_bytes(self.SetupData[1568:1572], "little", signed=False)
-            self.EDRShutterNs = int.from_bytes(self.SetupData[1572:1576], "little", signed=False)
-            self.FrameDelayNs = int.from_bytes(self.SetupData[1576:1580], "little", signed=False)
-            self.ImPosXAcq = int.from_bytes(self.SetupData[1580:1584], "little", signed=False)
-            self.ImPosYAcq = int.from_bytes(self.SetupData[1584:1588], "little", signed=False)
-            self.ImWidthAcq = int.from_bytes(self.SetupData[1588:1592], "little", signed=False)
-            self.ImHeightAcq = int.from_bytes(self.SetupData[1592:1596], "little", signed=False)
-            self.Description = decode_text(self.SetupData[1596:5692])
-            self.RisingEdge = bool(int.from_bytes(self.SetupData[5692:5696], "little", signed=False))
-            self.FilterTime = int.from_bytes(self.SetupData[5696:5700], "little", signed=False)
-            self.LongReady = bool(int.from_bytes(self.SetupData[5700:5704], "little", signed=False))
-            self.ShutterOff = bool(int.from_bytes(self.SetupData[5704:5708], "little", signed=False))
-            self.Res4 = [int.from_bytes(self.SetupData[5708 + a:5709 + a], "little", signed=False) for a in range(16)]
-            self.bMetaWB = bool(int.from_bytes(self.SetupData[5724:5728], "little", signed=False))
-            self.Hue = int.from_bytes(self.SetupData[5728:5732], "little", signed=True)
-            self.BlackLevel = int.from_bytes(self.SetupData[5732:5736], "little", signed=True)
-            self.WhiteLevel = int.from_bytes(self.SetupData[5736:5740], "little", signed=True)
-            self.LensDescription = decode_text(self.SetupData[5740:5996])
-            self.LensAperature = struct.unpack('f', self.SetupData[5996:6000])[0]
-            self.LensFocusDistance = struct.unpack('f', self.SetupData[6000:6004])[0]
-            self.LensFocalLength = struct.unpack('f', self.SetupData[6004:6008])[0]
-            self.fOffset = struct.unpack('f', self.SetupData[6008:6012])[0]
-            self.fGain = struct.unpack('f', self.SetupData[6012:6016])[0]
-            self.fSaturation = struct.unpack('f', self.SetupData[6016:6020])[0]
-            self.fHue = struct.unpack('f', self.SetupData[6020:6024])[0]
-            self.fGamma = struct.unpack('f', self.SetupData[6024:6028])[0]
-            self.fGammaR = struct.unpack('f', self.SetupData[6028:6032])[0]
-            self.fGammaB = struct.unpack('f', self.SetupData[6032:6036])[0]
-            self.fFlare = struct.unpack('f', self.SetupData[6036:6040])[0]
-            self.fPedestalR = struct.unpack('f', self.SetupData[6040:6044])[0]
-            self.fPedestalG = struct.unpack('f', self.SetupData[6044:6048])[0]
-            self.fPedestalB = struct.unpack('f', self.SetupData[6048:6052])[0]
-            self.fChroma = struct.unpack('f', self.SetupData[6052:6056])[0]
-            self.ToneLabel = decode_text(self.SetupData[6056:6312])
-            self.TonePoints = int.from_bytes(self.SetupData[6312:6316], "little", signed=True)
-            self.fTone = [
-                [struct.unpack('f', self.SetupData[6316 + 4 * b + 8 * a:6320 + 4 * b + 8 * a])[0] for b in range(2)] for
-                a in range(32)]
-            self.UserMatrixLabel = decode_text(self.SetupData[6572:6828])
-            self.EnableMatricies = bool(int.from_bytes(self.SetupData[6828:6832], "little", signed=False))
-            self.cmUser = [struct.unpack('f', self.SetupData[6832 + 4 * b:6836 + 4 * b])[0] for b in range(9)]
-            self.EnableCrop = bool(int.from_bytes(self.SetupData[6868:6872], "little", signed=False))
-            self.CropRect = [
-                [int.from_bytes(self.SetupData[6872 + 4 * a + 8 * b:6876 + 4 * a + 8 * b], "little", signed=False) for a
-                 in range(2)] for b in range(2)]
-            self.EnableResample = bool(int.from_bytes(self.SetupData[6888:6892], "little", signed=False))
-            self.ResampleWidth = int.from_bytes(self.SetupData[6892:6896], "little", signed=False)
-            self.ResampleHeight = int.from_bytes(self.SetupData[6896:6900], "little", signed=False)
-            self.fGain16 = struct.unpack('f', self.SetupData[6900:6904])[0]
-            self.FRPShape = [int.from_bytes(self.SetupData[6904 + 4 * a:6908 + 4 * a], "little", signed=False) for a in
-                             range(16)]
-            self.TrigTC = int.from_bytes(self.SetupData[6968:6976], "little",
-                                         signed=False)  # May be the wrong data type but correct size
-            self.fPbRate = struct.unpack('f', self.SetupData[6976:6980])[0]
-            self.fTcRate = struct.unpack('f', self.SetupData[6980:6984])[0]
-            self.CineName = decode_text(self.SetupData[6984:7240])
-            self.fGainR = struct.unpack('f', self.SetupData[7240:7244])[0]
-            self.fGainG = struct.unpack('f', self.SetupData[7244:7248])[0]
-            self.fGainB = struct.unpack('f', self.SetupData[7248:7252])[0]
-            self.cmCalib = [struct.unpack('f', self.SetupData[7252 + 4 * a:7256 + 4 * a])[0] for a in range(9)]
-            self.fWBTemp = struct.unpack('f', self.SetupData[7288:7292])[0]
-            self.fWBCc = struct.unpack('f', self.SetupData[7292:7296])[0]
-            self.CalibrationInfo = decode_text(self.SetupData[7296:8320])
-            self.OpticalFilter = decode_text(self.SetupData[8320:9344])
-            self.GpsInfo = decode_text(self.SetupData[9344:9600])
-            self.Uuid = decode_text(self.SetupData[9600:9856])
-            self.CreatedBy = decode_text(self.SetupData[9856:10112])
-            self.RecBPP = int.from_bytes(self.SetupData[10112:10116], "little", signed=False)
-            self.LowestFormatBPP = int.from_bytes(self.SetupData[10116:10118], "little", signed=False)
-            self.LowestFormatQ = int.from_bytes(self.SetupData[10118:10120], "little", signed=False)
-            self.fToe = struct.unpack('f', self.SetupData[10120:10124])[0]
-            self.LogMode = int.from_bytes(self.SetupData[10124:10128], "little", signed=False)
-            self.CameraModel = self.SetupData[10128:10384]
-            self.WBType = int.from_bytes(self.SetupData[10384:10388], "little", signed=False)
-            self.fDecimation = struct.unpack('f', self.SetupData[10388:10392])[0]
-            self.MagSerial = int.from_bytes(self.SetupData[10392:10396], "little", signed=False)
-            self.CSSerial = int.from_bytes(self.SetupData[10396:10400], "little", signed=False)
-            self.dFrameRate = struct.unpack('d', self.SetupData[10400:10408])[0]
-            self.SensorMode = int.from_bytes(self.SetupData[10408:10412], "little", signed=False)
-            self.UndecFirst = int.from_bytes(self.SetupData[10412:10416], "little", signed=False)
-            self.SupportsBinning = bool(int.from_bytes(self.SetupData[10416:10420], "little", signed=False))
-            self.UvSensor = bool(int.from_bytes(self.SetupData[10420:10424], "little", signed=False))
-            self.AnaDaqDescription = self.SetupData[10424:10552]
-            self.BinDaqDescription = self.SetupData[10552:10680]
-            self.DaqOptions = bool(int.from_bytes(self.SetupData[10680:10684], "little", signed=False))
-
-    def _validate_frame_range(self, start_frame: int, end_frame: int) -> tuple[int, int]:
-        first = int(self.FileHeader.FirstImageNo)
-        last = first + int(self.FileHeader.ImageCount) - 1
-        if start_frame < first or end_frame > last or end_frame < start_frame:
-            raise ValueError("Frame range out of bounds.")
-        return first, last
-
-    def _iter_loaded_frames(self, start_frame: int, end_frame: int, *, replace_dead_pixels: bool = False):
-        """Yield loaded frames for a range without retaining a full stack in memory."""
-        for frame_no in range(start_frame, end_frame + 1):
-            self.LoadFrame(frame_no)
-            if replace_dead_pixels and self.PixelArray.ndim == 2:
-                self.ReplaceDeadPixels()
-            yield self.PixelArray
-
-    def SaveFramesToNewFile(self, output_filename, start_frame, end_frame):
-        """Write a trimmed `.cine` containing frames `[start_frame, end_frame]`."""
         first, _ = self._validate_frame_range(start_frame, end_frame)
-
         new_image_count = int(end_frame - start_frame + 1)
-        bytes_per_offset = 8 if int(self.FileHeader.Version) == 1 else 4
+        bytes_per_offset = 8 if int(header.Version) == 1 else 4
 
         with open(output_filename, "wb") as output_file:
-            new_file_header = bytearray(self.FileHeader.FileHeaderData)
+            new_file_header = bytearray(header.FileHeaderData)
             struct.pack_into("<I", new_file_header, 12, new_image_count)
             struct.pack_into("<i", new_file_header, 16, int(start_frame))
             struct.pack_into("<I", new_file_header, 20, new_image_count)
             output_file.write(new_file_header)
-            output_file.write(self.ImageHeader.ImageHeaderData)
-            output_file.write(self.CameraSetup.SetupData)
+            output_file.write(image_header.ImageHeaderData)
+            output_file.write(setup.SetupData)
 
             offsets_start = output_file.tell()
             offset_position = offsets_start + new_image_count * bytes_per_offset
             output_offsets = []
 
-            for frame in range(start_frame, end_frame + 1):
-                idx = frame - first
-                frame_start = int(self.ImageLocations.pImage[idx])
-                frame_stop = int(self.ImageLocations.pImage[idx + 1])
+            for frame_no in range(start_frame, end_frame + 1):
+                idx = frame_no - first
+                frame_start = int(offsets[idx])
+                frame_stop = int(offsets[idx + 1])
                 frame_size = frame_stop - frame_start
                 output_offsets.append(offset_position)
                 offset_position += frame_size
@@ -480,50 +346,91 @@ class Cine:
                 else:
                     output_file.write(struct.pack("<I", int(offset)))
 
-            for frame in range(start_frame, end_frame + 1):
-                idx = frame - first
-                frame_start = int(self.ImageLocations.pImage[idx])
-                frame_stop = int(self.ImageLocations.pImage[idx + 1])
+            for frame_no in range(start_frame, end_frame + 1):
+                idx = frame_no - first
+                frame_start = int(offsets[idx])
+                frame_stop = int(offsets[idx + 1])
                 frame_size = frame_stop - frame_start
-                self.file.seek(frame_start, 0)
-                output_file.write(self.file.read(frame_size))
+                handle.seek(frame_start, 0)
+                output_file.write(handle.read(frame_size))
 
-    def AverageFrames(self, start_frame, end_frame, replace=False):
-        """Compute per-pixel mean over a frame range.
+    def average_frames(
+        self,
+        start_frame: int,
+        end_frame: int,
+        *,
+        replace_dead_pixels: bool = False,
+        chunk_size: int = 8,
+    ) -> np.ndarray:
+        """Compute per-pixel mean over an inclusive frame range.
 
-        For speed, this uses chunked accumulation with bounded memory.
+        Parameters
+        ----------
+        start_frame:
+            First global frame number to include.
+        end_frame:
+            Last global frame number to include (inclusive).
+        replace_dead_pixels:
+            If `True`, run dead-pixel replacement per frame before averaging.
+        chunk_size:
+            Number of frames accumulated per chunk for lower Python overhead.
+
+        Returns
+        -------
+        numpy.ndarray
+            Averaged frame with dtype matching the currently loaded frame.
         """
         self._validate_frame_range(start_frame, end_frame)
+        current = self._require_pixel_array()
         frame_iter = self._iter_loaded_frames(
             start_frame,
             end_frame,
-            replace_dead_pixels=replace,
+            replace_dead_pixels=replace_dead_pixels,
         )
-        avg, _ = average_from_frame_iter(frame_iter, out_dtype=self.PixelArray.dtype, chunk_size=8)
+        avg, _ = average_from_frame_iter(frame_iter, out_dtype=current.dtype, chunk_size=chunk_size)
         return avg
 
-    def ModeFrames(
+    def mode_frames(
         self,
-        start_frame,
-        end_frame,
-        replace=False,
+        start_frame: int,
+        end_frame: int,
+        *,
+        replace_dead_pixels: bool = False,
         method: str = "auto",
         q_bg: float = 0.80,
         k_sigma: float = 2.5,
         min_keep: int = 3,
         max_keep: int | None = 96,
         stack_limit: int = 128,
-    ):
-        """Robust bright-background estimate for mono data.
+    ) -> np.ndarray:
+        """Estimate robust bright background over a frame range.
 
         Parameters
         ----------
+        start_frame:
+            First global frame number to include.
+        end_frame:
+            Last global frame number to include (inclusive).
+        replace_dead_pixels:
+            If `True`, run dead-pixel replacement per frame before processing.
         method:
-            `\"auto\"`, `\"mad\"`, or `\"topk\"`.
-            `\"mad\"` matches legacy quantile/MAD behavior (full stack).
-            `\"topk\"` is low-memory and generally faster for long ranges.
-            `\"auto\"` uses `\"mad\"` for short ranges (`<= stack_limit`) and
-            `\"topk\"` otherwise.
+            `"auto"`, `"mad"`, or `"topk"` background estimator.
+        q_bg:
+            Bright-background quantile threshold (0..1).
+        k_sigma:
+            MAD rejection multiplier used by `method="mad"`.
+        min_keep:
+            Minimum accepted samples per pixel.
+        max_keep:
+            Upper cap for top-k memory (used by `method="topk"`).
+        stack_limit:
+            For `method="auto"`, frame-count threshold for switching from
+            full-stack MAD to top-k.
+
+        Returns
+        -------
+        numpy.ndarray
+            Robust background image (`uint16`).
         """
         self._validate_frame_range(start_frame, end_frame)
         frame_count = end_frame - start_frame + 1
@@ -531,7 +438,11 @@ class Cine:
         if method_norm == "auto":
             method_norm = "mad" if frame_count <= stack_limit else "topk"
 
-        frame_iter = self._iter_loaded_frames(start_frame, end_frame, replace_dead_pixels=replace)
+        frame_iter = self._iter_loaded_frames(
+            start_frame,
+            end_frame,
+            replace_dead_pixels=replace_dead_pixels,
+        )
         if method_norm == "mad":
             return robust_background_mad_stack(
                 frame_iter,
@@ -551,74 +462,152 @@ class Cine:
             )
         raise ValueError("method must be one of: 'auto', 'mad', 'topk'")
 
-    def LoadFramesBatch(self, start_frame, count):
-        """Load `count` consecutive frames into a stacked array."""
+    def load_frames_batch(self, start_frame: int, count: int) -> np.ndarray:
+        """Load `count` consecutive frames into one stacked array.
+
+        Parameters
+        ----------
+        start_frame:
+            First global frame number to include.
+        count:
+            Number of consecutive frames to load.
+
+        Returns
+        -------
+        numpy.ndarray
+            Stacked array with frame dimension on the last axis.
+            Mono: `[H, W, N]`; color: `[H, W, 3, N]`.
+        """
         if count <= 0:
             raise ValueError("count must be > 0")
         stop_frame = start_frame + count - 1
         self._validate_frame_range(start_frame, stop_frame)
-        frames = []
-        for frame_no in range(start_frame, stop_frame + 1):
-            self.LoadFrame(frame_no)
-            frames.append(self.PixelArray.copy())
-        return np.stack(frames, axis=-1)
 
-    def GetFrameRGB(self, image_no=None, bayer_pattern="RGGB"):
-        """Return the current frame as RGB, with optional simple Bayer demosaic."""
+        self.load_frame(start_frame)
+        first = self._require_pixel_array().copy()
+        out = np.empty(first.shape + (count,), dtype=first.dtype)
+        out[..., 0] = first
+
+        for idx, frame_no in enumerate(range(start_frame + 1, stop_frame + 1), start=1):
+            self.load_frame(frame_no)
+            out[..., idx] = self._require_pixel_array()
+        return out
+
+    def get_frame_rgb(self, image_no: int | None = None, *, bayer_pattern: str = "RGGB") -> np.ndarray:
+        """Return current or selected frame as RGB.
+
+        Parameters
+        ----------
+        image_no:
+            Optional global frame number to load before conversion.
+        bayer_pattern:
+            Bayer layout token for mono demosaic (`RGGB`, `BGGR`, `GRBG`, `GBRG`).
+
+        Returns
+        -------
+        numpy.ndarray
+            RGB frame.
+        """
         if image_no is not None:
-            self.LoadFrame(image_no)
+            self.load_frame(image_no)
 
-        if self.PixelArray.ndim == 3:
-            return self.PixelArray[..., ::-1].copy()
-        if self.PixelArray.ndim == 2:
-            return demosaic_bilinear(self.PixelArray, pattern=bayer_pattern)
+        frame = self._require_pixel_array()
+        if frame.ndim == 3:
+            return frame[..., ::-1].copy()
+        if frame.ndim == 2:
+            return demosaic_bilinear(frame, pattern=bayer_pattern)
         raise ValueError("Unsupported frame shape for RGB conversion")
 
-    # snake_case aliases
-    def open_cine_file(self, filename):
-        return self.OpenCineFile(filename)
+    def unpack_10bit_data(self, data: bytes) -> np.ndarray:
+        """Expose packed-10 decode helper used internally by frame decode."""
+        return unpack_10bit_data(data)
 
-    def close_file(self):
-        return self.CloseFile()
-
-    def next_frame(self, increment=1):
-        return self.NextFrame(increment=increment)
-
-    def load_frame(self, image_no, convert_bgr_to_rgb=False):
-        return self.LoadFrame(image_no, convert_bgr_to_rgb=convert_bgr_to_rgb)
-
-    def replace_dead_pixels(self, dead_value=4095):
-        return self.ReplaceDeadPixels(dead_value=dead_value)
-
-    def save_frames_to_new_file(self, output_filename, start_frame, end_frame):
-        return self.SaveFramesToNewFile(output_filename, start_frame, end_frame)
-
-    def average_frames(self, start_frame, end_frame, replace=False):
-        return self.AverageFrames(start_frame, end_frame, replace=replace)
-
-    def mode_frames(
-        self,
-        start_frame,
-        end_frame,
-        replace=False,
-        method: str = "auto",
-        q_bg: float = 0.80,
-        k_sigma: float = 2.5,
-        min_keep: int = 3,
-        max_keep: int | None = 96,
-        stack_limit: int = 128,
-    ):
-        return self.ModeFrames(
-            start_frame,
-            end_frame,
-            replace=replace,
-            method=method,
-            q_bg=q_bg,
-            k_sigma=k_sigma,
-            min_keep=min_keep,
-            max_keep=max_keep,
-            stack_limit=stack_limit,
+    def _decode_frame(self, raw: bytes) -> np.ndarray:
+        image_header = self._require_image_header()
+        setup = self._require_camera_setup()
+        return decode_frame_payload(
+            raw,
+            bit_count=int(image_header.biBitCount),
+            width=int(image_header.biWidth),
+            height_signed=int(image_header.biHeight),
+            real_bpp=int(setup.RealBPP),
+            unpack_10bit_fn=self.unpack_10bit_data,
         )
 
-    def load_frames_batch(self, start_frame, count):
-        return self.LoadFramesBatch(start_frame, count)
+    def _validate_frame_range(self, start_frame: int, end_frame: int) -> tuple[int, int]:
+        header = self._require_file_header()
+        first = int(header.FirstImageNo)
+        last = first + int(header.ImageCount) - 1
+        if start_frame < first or end_frame > last or end_frame < start_frame:
+            raise ValueError("Frame range out of bounds.")
+        return first, last
+
+    def _iter_loaded_frames(
+        self,
+        start_frame: int,
+        end_frame: int,
+        *,
+        replace_dead_pixels: bool = False,
+    ) -> Iterator[np.ndarray]:
+        """Yield decoded frame arrays over `[start_frame, end_frame]`."""
+        load_frame = self.load_frame
+        replace = self.replace_dead_pixels
+        for frame_no in range(start_frame, end_frame + 1):
+            load_frame(frame_no)
+            if replace_dead_pixels and self._require_pixel_array().ndim == 2:
+                replace()
+            yield self._require_pixel_array()
+
+    @staticmethod
+    def _decode_recording_datetime(trigger_time: int, recording_tz_minutes: int) -> datetime | None:
+        """Decode CINE `TriggerTime` token to timezone-aware datetime when possible."""
+        seconds = int(trigger_time >> 32)
+        frac = int(trigger_time & 0xFFFFFFFF)
+        if seconds <= 0:
+            return None
+
+        try:
+            dt_utc = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+
+        micros = int(round((frac / float(1 << 32)) * 1_000_000.0))
+        if micros >= 1_000_000:
+            dt_utc += timedelta(seconds=1)
+            micros -= 1_000_000
+        dt_utc = dt_utc.replace(microsecond=micros)
+
+        if abs(int(recording_tz_minutes)) > 24 * 60:
+            return dt_utc
+        tzinfo = timezone(timedelta(minutes=int(recording_tz_minutes)))
+        return dt_utc.astimezone(tzinfo)
+
+    def _require_file_handle(self) -> BinaryIO:
+        if self.file_handle is None:
+            raise RuntimeError("No CINE file is open.")
+        return self.file_handle
+
+    def _require_file_header(self) -> CineHeader:
+        if self.file_header is None:
+            raise RuntimeError("File header is not loaded.")
+        return self.file_header
+
+    def _require_image_header(self) -> BitmapHeader:
+        if self.image_header is None:
+            raise RuntimeError("Image header is not loaded.")
+        return self.image_header
+
+    def _require_camera_setup(self) -> Setup:
+        if self.camera_setup is None:
+            raise RuntimeError("Camera setup is not loaded.")
+        return self.camera_setup
+
+    def _require_image_locations(self) -> ImageOffsets:
+        if self.image_locations is None:
+            raise RuntimeError("Image offsets are not loaded.")
+        return self.image_locations
+
+    def _require_pixel_array(self) -> np.ndarray:
+        if self.pixel_array is None:
+            raise RuntimeError("No frame loaded.")
+        return self.pixel_array

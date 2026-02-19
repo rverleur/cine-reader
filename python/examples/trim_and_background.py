@@ -10,14 +10,14 @@ from cine_reader import Cine
 def main() -> None:
     cine_path = Path(__file__).resolve().parents[2] / "sample_data" / "TrimmedCine.cine"
     cine = Cine(cine_path)
-    first = cine.FileHeader.FirstImageNo
-    end = min(first + 20, first + cine.FileHeader.ImageCount - 1)
+    first = cine.first_frame_number
+    end = min(first + 20, cine.last_frame_number)
 
-    cine.SaveFramesToNewFile("trimmed_20_frames.cine", first, end)
-    bg = cine.ModeFrames(first, end, method="topk")
+    cine.save_frames_to_new_file("trimmed_20_frames.cine", first, end)
+    bg = cine.mode_frames(first, end, method="topk")
     print("Background image:", bg.shape, bg.dtype, int(bg.min()), int(bg.max()))
 
-    cine.CloseFile()
+    cine.close_file()
 
 
 if __name__ == "__main__":

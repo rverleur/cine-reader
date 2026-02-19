@@ -15,23 +15,31 @@ def test_open_sample_cine_if_available() -> None:
 
     cine = Cine(sample)
     try:
-        assert cine.FileHeader.ImageCount > 0
-        assert cine.ImageHeader.biWidth > 0
-        assert abs(cine.ImageHeader.biHeight) > 0
-        assert cine.PixelArray.size > 0
+        assert cine.file_header is not None
+        assert cine.image_header is not None
+        assert cine.camera_setup is not None
 
-        first = cine.FileHeader.FirstImageNo
-        last = first + min(4, cine.FileHeader.ImageCount - 1)
-        cine.LoadFrame(first)
-        assert cine.PixelArray.ndim in (2, 3)
+        assert cine.total_frames > 0
+        assert cine.image_header.biWidth > 0
+        assert abs(cine.image_header.biHeight) > 0
+        assert cine.image.size > 0
 
-        avg = cine.AverageFrames(first, last)
-        assert avg.shape == cine.PixelArray.shape
+        first = cine.first_frame_number
+        last = first + min(4, cine.total_frames - 1)
+        cine.load_frame(first)
+        assert cine.frame.ndim in (2, 3)
 
-        if cine.PixelArray.ndim == 2:
-            mode_mad = cine.ModeFrames(first, last, method="mad")
-            mode_topk = cine.ModeFrames(first, last, method="topk")
-            assert mode_mad.shape == cine.PixelArray.shape
-            assert mode_topk.shape == cine.PixelArray.shape
+        avg = cine.average_frames(first, last)
+        assert avg.shape == cine.frame.shape
+
+        if cine.frame.ndim == 2:
+            mode_mad = cine.mode_frames(first, last, method="mad")
+            mode_topk = cine.mode_frames(first, last, method="topk")
+            assert mode_mad.shape == cine.frame.shape
+            assert mode_topk.shape == cine.frame.shape
+
+        assert cine.last_frame_number >= cine.first_frame_number
+        assert cine.frame_rate >= 0.0
+        assert cine.exposure_time >= 0.0
     finally:
-        cine.CloseFile()
+        cine.close_file()

@@ -21,59 +21,76 @@ from pathlib import Path
 from cine_reader import Cine
 
 cine_path = Path("sample_data/TrimmedCine.cine")
-cine = Cine(cine_path)
-print(cine.FileHeader.ImageCount)
-print(cine.ImageHeader.biWidth, cine.ImageHeader.biHeight)
 
-cine.LoadFrame(cine.FileHeader.FirstImageNo)
-img = cine.PixelArray
+with Cine(cine_path) as cine:
+    print(cine.total_frames)
+    print(cine.first_frame_number, cine.last_frame_number)
+    print(cine.frame_rate, cine.exposure_time_seconds)
+    print(cine.recording_date)
 
-avg = cine.AverageFrames(cine.FileHeader.FirstImageNo, cine.FileHeader.FirstImageNo + 10)
-bg = cine.ModeFrames(cine.FileHeader.FirstImageNo, cine.FileHeader.FirstImageNo + 20, method="auto")
-rgb = cine.GetFrameRGB()
+    cine.load_frame(cine.first_frame_number)
+    img = cine.image
 
-cine.CloseFile()
+    avg = cine.average_frames(cine.first_frame_number, cine.first_frame_number + 10)
+    bg = cine.mode_frames(cine.first_frame_number, cine.first_frame_number + 20, method="auto")
+    rgb = cine.get_frame_rgb()
 ```
 
 ## Main API
 
-`Cine` class supports both legacy and snake_case methods:
-- `OpenCineFile` / `open_cine_file`
-- `LoadFrame` / `load_frame`
-- `NextFrame` / `next_frame`
-- `CloseFile` / `close_file`
-- `ReplaceDeadPixels` / `replace_dead_pixels`
-- `AverageFrames` / `average_frames`
-- `ModeFrames` / `mode_frames`
-- `SaveFramesToNewFile` / `save_frames_to_new_file`
-- `LoadFramesBatch` / `load_frames_batch`
-- `GetFrameRGB`
+Primary methods use snake_case:
 
-Public parsed objects:
-- `FileHeader`
-- `ImageHeader`
-- `CameraSetup`
-- `ImageLocations`
-- `PixelArray`
+- `open_cine_file(path)`
+- `load_frame(image_no, convert_bgr_to_rgb=False)`
+- `next_frame(increment=1, convert_bgr_to_rgb=False)`
+- `close_file()`
+- `replace_dead_pixels(dead_value=4095)`
+- `average_frames(start_frame, end_frame, replace_dead_pixels=False, chunk_size=8)`
+- `mode_frames(start_frame, end_frame, replace_dead_pixels=False, method="auto", q_bg=0.80, k_sigma=2.5, min_keep=3, max_keep=96, stack_limit=128)`
+- `load_frames_batch(start_frame, count)`
+- `get_frame_rgb(image_no=None, bayer_pattern="RGGB")`
+- `save_frames_to_new_file(output_filename, start_frame, end_frame)`
+
+Top-level aliases for frequently used metadata:
+
+- `first_frame_number`
+- `total_frames`
+- `last_frame_number`
+- `frame_rate`
+- `exposure_time_ns`
+- `exposure_time_seconds` (alias: `exposure_time`)
+- `recording_datetime`
+- `recording_date`
+- `image` / `frame` (aliases for latest pixel array)
+
+Specification-aligned metadata blocks remain available:
+
+- `file_header` (`CineHeader`) with CINE field names (`FirstImageNo`, `ImageCount`, ...)
+- `image_header` (`BitmapHeader`) with `bi*` names (`biWidth`, `biBitCount`, ...)
+- `camera_setup` (`Setup`) with setup field names (`FrameRate`, `ShutterNs`, `RealBPP`, ...)
+- `image_locations` (`ImageOffsets`) with frame offsets (`pImage`)
 
 ## Module Layout
 
-The Python implementation is split into focused modules:
 - `python/src/cine_reader/cine.py`: public `Cine` facade and file lifecycle.
+- `python/src/cine_reader/headers.py`: dataclasses + binary parsing for header/setup/offset blocks.
 - `python/src/cine_reader/frame_decode.py`: payload decode logic (8/16/24/48 and packed 10-bit).
 - `python/src/cine_reader/image_ops.py`: dead-pixel replacement and Bayer demosaic utilities.
-- `python/src/cine_reader/stats.py`: fast frame statistics (`average` and robust background estimators).
+- `python/src/cine_reader/stats.py`: frame statistics (`average` and robust background estimators).
 - `python/src/cine_reader/unpack.py`: native-library loading plus NumPy 10-bit fallback.
 
 ## Performance Hints
 
 For large frame ranges:
-- Use `ModeFrames(..., method="topk")` for bounded-memory robust background estimation.
-- Use `ModeFrames(..., method="mad")` when you want legacy quantile/MAD behavior on shorter ranges.
-- Keep `replace=False` unless dead-pixel correction is required.
-- If you do many operations, reuse the same `Cine` object instead of reopening files.
 
-`ModeFrames` options:
+- Use `mode_frames(..., method="topk")` for bounded-memory robust background estimation.
+- Use `mode_frames(..., method="mad")` to match legacy quantile/MAD behavior.
+- Keep `replace_dead_pixels=False` unless dead-pixel correction is required.
+- Reuse the same `Cine` object for repeated operations.
+- Tune `average_frames(..., chunk_size=...)` for your memory/CPU balance.
+
+`mode_frames` options:
+
 - `method`: `"auto" | "mad" | "topk"`
 - `q_bg`: bright baseline quantile (default `0.80`)
 - `k_sigma`: MAD rejection scale for `method="mad"` (default `2.5`)
@@ -84,8 +101,9 @@ For large frame ranges:
 ## Packed 10-bit Decode
 
 The package automatically selects:
+
 1. Bundled native unpack library for your OS/arch.
-2. NumPy fallback with the same lookup-table mapping as the C implementation.
+1. NumPy fallback with the same lookup-table mapping as the C implementation.
 
 Force fallback mode:
 
@@ -106,6 +124,6 @@ Run:
 PYTHONPATH=python/src pytest python/tests -q
 ```
 
-The smoke test will auto-skip if no sample `.cine` file is present.
+The smoke test auto-skips if no sample `.cine` file is present.
 
 Detailed API notes are in `python/API.md`.
