@@ -6,6 +6,7 @@ from pathlib import Path
 
 from cine_reader import Cine
 
+import matplotlib.pyplot as plt
 
 def main() -> None:
     cine_path = Path(__file__).resolve().parents[2] / "sample_data" / "TrimmedCine.cine"
@@ -29,8 +30,11 @@ def main() -> None:
     rgb = cine.get_frame_rgb(first)
     print("RGB frame:", rgb.shape, rgb.dtype)
 
-    cine.close_file()
+    cine.replace_dead_pixels()
+    plt.imshow(cine.frame, cmap="gray")
+    plt.show()
 
+    cine.close_file()
 
 if __name__ == "__main__":
     main()
