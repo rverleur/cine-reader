@@ -30,7 +30,7 @@ This repository contains:
 ## Python Install
 
 ```bash
-pip install "git+https://github.com/<your-user>/<your-repo>.git"
+pip install "git+https://github.com/rverleur/cine-reader.git"
 ```
 
 Editable local install:
