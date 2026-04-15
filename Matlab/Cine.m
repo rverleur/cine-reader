@@ -26,6 +26,10 @@ classdef Cine < handle
         KeepAnnotations   (1,1) logical = false   % if true, stores AnnotationData each frame
         AssumeConstAnn    (1,1) logical = true    % assume constant annotation size (fast path)
         Debug             (1,1) logical = false   % extra checks (slower)
+        RemoveDeadPixels  (1,1) logical = false   % repair pixels on every LoadFrame
+        Debayer           (1,1) logical = false   % debayer raw CFA frames on every LoadFrame
+        DeadValue                         = []     % [] means use default uint16(4095)
+        BayerPattern      (1,1) string  = "auto"
     end
 
     %% Public state
@@ -40,6 +44,10 @@ classdef Cine < handle
 
         % last-loaded frame results
         PixelArray
+        RawPixelArray
+        RedPixels
+        GreenPixels
+        BluePixels
         AnnotationSize    uint32 = uint32(0)
         AnnotationData    uint8  = uint8([])
         Annotation        uint8  = uint8([])
@@ -74,7 +82,26 @@ classdef Cine < handle
 
     %% Lifecycle
     methods
-        function obj = Cine(filename)
+        function obj = Cine(filename, varargin)
+            if mod(numel(varargin), 2) ~= 0
+                error('Cine name/value options must be pairs.');
+            end
+            for i = 1:2:numel(varargin)
+                key = lower(string(varargin{i}));
+                val = varargin{i+1};
+                switch key
+                    case "removedeadpixels"
+                        obj.RemoveDeadPixels = logical(val);
+                    case "debayer"
+                        obj.Debayer = logical(val);
+                    case "deadvalue"
+                        obj.DeadValue = val;
+                    case "bayerpattern"
+                        obj.BayerPattern = string(val);
+                    otherwise
+                        error('Unknown Cine option: %s', char(key));
+                end
+            end
             if nargin
                 obj.OpenCineFile(filename);
             end
@@ -163,7 +190,7 @@ classdef Cine < handle
                 if obj.HasConstAnn
                     imgBytes = double(nextOff - startOff) - double(obj.AnnotationSize);
                 else
-                    % FIX: last 4 bytes are at [S-4 .. S-1], not [S-3 .. S]
+                    % Trailing image-size field starts four bytes before the payload.
                     imgBytes = typecast( ...
                         uint8(obj.mm.Data(a0 + double(obj.AnnotationSize) - 4 + (0:3))), ...
                         'uint32');
@@ -209,11 +236,11 @@ classdef Cine < handle
 
             if bitCount == 8
                 img = obj.readPadded8_vec(raw, h, w, rowBytes, rowStride, 1);
-                obj.PixelArray = obj.intoU8(img, h, w);
+                frame = obj.intoU8(img, h, w);
 
             elseif bitCount == 24
                 img = obj.readPadded8_vec(raw, h, w, rowBytes, rowStride, 3);
-                obj.PixelArray = obj.intoU8RGB(img, h, w);
+                frame = obj.intoU8RGB(img, h, w);
 
             elseif bitCount == 16 || bitCount == 48
                 if obj.CameraSetup.RealBPP == 10
@@ -225,26 +252,36 @@ classdef Cine < handle
                         if obj.Debug && numel(pix) ~= w*h
                             error('Unpacked count %d != w*h %d', numel(pix), w*h);
                         end
-                        obj.PixelArray = obj.intoU16_fromVec(pix, h, w);
+                        frame = obj.intoU16_fromVec(pix, h, w);
                     else
                         if obj.Debug && numel(pix) ~= 3*w*h
                             error('Unpacked RGB16 %d != 3*w*h %d', numel(pix), 3*w*h);
                         end
-                        obj.PixelArray = obj.intoU16RGB_fromVec(pix, h, w);
+                        frame = obj.intoU16RGB_fromVec(pix, h, w);
                     end
                 else
                     % unpadded or row-padded 16/48-bit container
                     if bitCount == 16
                         img = obj.readPadded16_vec(raw, h, w, rowBytes, rowStride, 1);
-                        obj.PixelArray = obj.intoU16(img, h, w);
+                        frame = obj.intoU16(img, h, w);
                     else
-                        img = obj.readPadded16_vec(raw, h, w, rowBytes, rowStride, 3); % FIX: ch=3
-                        obj.PixelArray = obj.intoU16RGB(img, h, w);
+                        img = obj.readPadded16_vec(raw, h, w, rowBytes, rowStride, 3);
+                        frame = obj.intoU16RGB(img, h, w);
                     end
                 end
             else
                 error('Unsupported biBitCount: %d', bitCount);
             end
+
+            obj.RawPixelArray = frame;
+            if obj.RemoveDeadPixels
+                frame = cine_replace_dead_pixels(frame, obj.resolveDeadValue(), obj.isRawColorCfaFrame(frame));
+            end
+            obj.updateColorSampleArrays(frame);
+            if obj.Debayer && obj.isRawColorCfaFrame(frame)
+                frame = cine_demosaic_bilinear(frame, obj.resolveBayerPattern());
+            end
+            obj.PixelArray = frame;
 
             % orientation (top-down means first row is top)
             % If you prefer bottom-up arrays, enable:
@@ -262,18 +299,27 @@ classdef Cine < handle
             acc = [];
             totalCount = 0;
             fr = int32(start_frame);
+            bc = double(obj.ImageHeader.biBitCount);
+            colorBatch = (obj.Debayer && obj.isRawColorCfa()) || bc==24 || bc==48;
             while fr <= int32(end_frame)
                 n = min(int32(chunk_size), int32(end_frame) - fr + 1);
                 batch = obj.LoadFramesBatch(fr, double(n));
 
-                if replace && ndims(batch)==3
+                if replace && ~obj.RemoveDeadPixels && ~colorBatch
                     for k = 1:double(n)
-                        batch(:,:,k) = cine_replace_dead_pixels(batch(:,:,k), uint16(4095));
+                        batch(:,:,k) = cine_replace_dead_pixels(batch(:,:,k), uint16(4095), obj.isRawColorCfa());
                     end
                 end
 
-                sumDim = ndims(batch);
+                if colorBatch
+                    sumDim = 4;
+                else
+                    sumDim = 3;
+                end
                 chunkSum = sum(double(batch), sumDim);
+                if colorBatch
+                    chunkSum = reshape(chunkSum, size(batch,1), size(batch,2), size(batch,3));
+                end
                 if isempty(acc)
                     acc = zeros(size(chunkSum), 'double');
                 end
@@ -400,8 +446,8 @@ classdef Cine < handle
                         error('ModeFrames supports mono frames only.');
                     end
                     pix = obj.PixelArray;
-                    if replace
-                        pix = cine_replace_dead_pixels(pix, uint16(4095));
+                    if replace && ~obj.RemoveDeadPixels
+                        pix = cine_replace_dead_pixels(pix, uint16(4095), obj.isRawColorCfaFrame(pix));
                     end
                     frames = cat(3, frames, single(pix)); %#ok<AGROW>
                 end
@@ -426,8 +472,8 @@ classdef Cine < handle
                         error('ModeFrames supports mono frames only.');
                     end
                     pix = obj.PixelArray;
-                    if replace
-                        pix = cine_replace_dead_pixels(pix, uint16(4095));
+                    if replace && ~obj.RemoveDeadPixels
+                        pix = cine_replace_dead_pixels(pix, uint16(4095), obj.isRawColorCfaFrame(pix));
                     end
                     frame = single(pix);
 
@@ -469,11 +515,15 @@ classdef Cine < handle
                 obj.LoadFrame(int32(frame_no));
             end
             if nargin<3 || isempty(bayer_pattern)
-                bayer_pattern = "RGGB";
+                bayer_pattern = obj.resolveBayerPattern();
             end
 
             if ndims(obj.PixelArray)==3
-                rgb = obj.PixelArray(:,:,[3 2 1]);
+                if obj.isRawColorCfa() && obj.Debayer
+                    rgb = obj.PixelArray;
+                else
+                    rgb = obj.PixelArray(:,:,[3 2 1]);
+                end
                 return;
             end
             if ndims(obj.PixelArray)==2
@@ -484,15 +534,32 @@ classdef Cine < handle
         end
 
         function ReplaceDeadPixels(obj, dead_value)
-            if nargin<2, dead_value = uint16(4095); end
-            obj.PixelArray = cine_replace_dead_pixels(obj.PixelArray, dead_value);
+            if nargin<2, dead_value = obj.resolveDeadValue(); end
+            obj.PixelArray = cine_replace_dead_pixels( ...
+                obj.PixelArray, dead_value, obj.isRawColorCfaFrame(obj.PixelArray));
+            if ~obj.isRawColorCfaFrame(obj.RawPixelArray) || ndims(obj.PixelArray) ~= 3
+                obj.updateColorSampleArrays(obj.PixelArray);
+            end
+        end
+
+        function DebayerFrame(obj, bayer_pattern)
+            if nargin<2 || isempty(bayer_pattern)
+                bayer_pattern = obj.resolveBayerPattern();
+            end
+            if ndims(obj.PixelArray)==3
+                return;
+            end
+            if ~obj.isRawColorCfaFrame(obj.PixelArray)
+                error('Current frame is not a raw color CFA/Bayer frame.');
+            end
+            obj.updateColorSampleArrays(obj.PixelArray);
+            obj.PixelArray = cine_demosaic_bilinear(obj.PixelArray, bayer_pattern);
         end
 
         function out = LoadFramesBatch(obj, start_frame, count)
             % Minimal batch API: loads count frames into a 3-D array.
-            % For 16-bit mono returns uint16 [H x W x count].
-            % For 8-bit mono returns uint8  [H x W x count].
-            % For RGB returns [... x 3 x count].
+            % Mono/raw CFA returns [H x W x count].
+            % Debayered/interpolated RGB returns [H x W x 3 x count].
             firstNo = int32(obj.FileHeader.FirstImageNo);
             lastNo  = firstNo + int32(obj.FileHeader.ImageCount)-1;
             stop_frame = start_frame + count - 1;
@@ -503,11 +570,20 @@ classdef Cine < handle
             h = abs(double(obj.ImageHeader.biHeight));
             w = double(obj.ImageHeader.biWidth);
             bc = double(obj.ImageHeader.biBitCount);
+            colorBatch = (obj.Debayer && obj.isRawColorCfa()) || bc==24 || bc==48;
 
             if bc==8
-                out = zeros(h,w,count,'uint8');
-            elseif bc==16 || (bc==48 && obj.CameraSetup.RealBPP==10)
-                out = zeros(h,w,count,'uint16');
+                if colorBatch
+                    out = zeros(h,w,3,count,'uint8');
+                else
+                    out = zeros(h,w,count,'uint8');
+                end
+            elseif bc==16
+                if colorBatch
+                    out = zeros(h,w,3,count,'uint16');
+                else
+                    out = zeros(h,w,count,'uint16');
+                end
             elseif bc==24
                 out = zeros(h,w,3,count,'uint8');
             elseif bc==48
@@ -518,10 +594,10 @@ classdef Cine < handle
 
             for i = 0:count-1
                 obj.LoadFrame(start_frame + int32(i));
-                if ndims(out)==3
-                    out(:,:,i+1) = obj.PixelArray;
-                else
+                if colorBatch
                     out(:,:,:,i+1) = obj.PixelArray;
+                else
+                    out(:,:,i+1) = obj.PixelArray;
                 end
             end
         end
@@ -637,8 +713,120 @@ classdef Cine < handle
             out = obj.BufferU16RGB;
         end
 
-        function rgb = demosaicBilinear(~, frame, pattern)
-            rgb = cine_demosaic_bilinear(frame, pattern);
+        function tf = isRawColorCfa(obj)
+            bitCount = double(obj.ImageHeader.biBitCount);
+            tf = (bitCount == 8 || bitCount == 16) && ...
+                isfield(obj.CameraSetup, 'bEnableColor') && logical(obj.CameraSetup.bEnableColor) && ...
+                isfield(obj.CameraSetup, 'CFA') && double(obj.CameraSetup.CFA) ~= 0;
+        end
+
+        function tf = isRawColorCfaFrame(obj, frame)
+            tf = obj.isRawColorCfa() && ndims(frame) == 2;
+        end
+
+        function pattern = resolveBayerPattern(obj)
+            if obj.BayerPattern ~= "auto"
+                pattern = upper(obj.BayerPattern);
+                return;
+            end
+            if ~isfield(obj.CameraSetup, 'CFA')
+                pattern = "RGGB";
+                return;
+            end
+
+            switch double(obj.CameraSetup.CFA)
+                case 1
+                    pattern = "GBRG";
+                case 2
+                    pattern = "BGGR";
+                case 3
+                    pattern = "GBRG";
+                case 4
+                    pattern = "RGGB";
+                case 5
+                    pattern = "GRBG";
+                case 6
+                    pattern = "BGGR";
+                otherwise
+                    pattern = "RGGB";
+            end
+        end
+
+        function deadValue = resolveDeadValue(obj)
+            if ~isempty(obj.DeadValue)
+                deadValue = obj.DeadValue;
+            else
+                deadValue = uint16(4095);
+            end
+        end
+
+        function updateColorSampleArrays(obj, frame)
+            if obj.isRawColorCfaFrame(frame)
+                obj.ensureRawColorSampleArrays(size(frame));
+                frameF = single(frame);
+                phases = obj.bayerColorPhases(obj.resolveBayerPattern());
+                for k = 1:size(phases, 1)
+                    rows = phases{k, 1}:2:size(frame, 1);
+                    cols = phases{k, 2}:2:size(frame, 2);
+                    switch phases{k, 3}
+                        case 'R'
+                            obj.RedPixels(rows, cols) = frameF(rows, cols);
+                        case 'G'
+                            obj.GreenPixels(rows, cols) = frameF(rows, cols);
+                        case 'B'
+                            obj.BluePixels(rows, cols) = frameF(rows, cols);
+                    end
+                end
+                return;
+            end
+
+            obj.RedPixels = [];
+            obj.GreenPixels = [];
+            obj.BluePixels = [];
+
+            if ndims(frame) == 3 && size(frame, 3) >= 3
+                if obj.isRawColorCfa() && obj.Debayer
+                    rgb = frame;
+                else
+                    rgb = frame(:,:,[3 2 1]);
+                end
+                obj.RedPixels = single(rgb(:,:,1));
+                obj.GreenPixels = single(rgb(:,:,2));
+                obj.BluePixels = single(rgb(:,:,3));
+            end
+        end
+
+        function ensureRawColorSampleArrays(obj, frameSize)
+            if ~isa(obj.RedPixels, 'single') || ~isequal(size(obj.RedPixels), frameSize)
+                obj.RedPixels = nan(frameSize, 'single');
+            else
+                obj.RedPixels(:) = NaN;
+            end
+            if ~isa(obj.GreenPixels, 'single') || ~isequal(size(obj.GreenPixels), frameSize)
+                obj.GreenPixels = nan(frameSize, 'single');
+            else
+                obj.GreenPixels(:) = NaN;
+            end
+            if ~isa(obj.BluePixels, 'single') || ~isequal(size(obj.BluePixels), frameSize)
+                obj.BluePixels = nan(frameSize, 'single');
+            else
+                obj.BluePixels(:) = NaN;
+            end
+        end
+
+        function phases = bayerColorPhases(~, pattern)
+            switch upper(string(pattern))
+                case "RGGB"
+                    phases = {1, 1, 'R'; 1, 2, 'G'; 2, 1, 'G'; 2, 2, 'B'};
+                case "BGGR"
+                    phases = {1, 1, 'B'; 1, 2, 'G'; 2, 1, 'G'; 2, 2, 'R'};
+                case "GRBG"
+                    phases = {1, 1, 'G'; 1, 2, 'R'; 2, 1, 'B'; 2, 2, 'G'};
+                case "GBRG"
+                    phases = {1, 1, 'G'; 1, 2, 'B'; 2, 1, 'R'; 2, 2, 'G'};
+                otherwise
+                    error('Unsupported Bayer pattern: %s', char(pattern));
+            end
         end
 
         % ---------- parsing helpers ----------
@@ -701,6 +889,14 @@ classdef Cine < handle
             S.FrameRate = uint32(0);
             if numel(S.SetupData) >= 772
                 S.FrameRate = typecast(uint8(S.SetupData(769:772)), 'uint32');
+            end
+            S.bEnableColor = false;
+            if numel(S.SetupData) >= 792
+                S.bEnableColor = logical(typecast(uint8(S.SetupData(789:792)), 'uint32'));
+            end
+            S.CFA = uint32(0);
+            if numel(S.SetupData) >= 812
+                S.CFA = typecast(uint8(S.SetupData(809:812)), 'uint32');
             end
         end
 

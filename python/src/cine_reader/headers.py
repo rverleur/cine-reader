@@ -107,7 +107,7 @@ class Setup:
     """Camera setup block.
 
     This dataclass keeps frequently used setup values as explicit fields and
-    also exposes all parsed legacy keys as dynamic attributes for compatibility.
+    also exposes parsed setup keys as dynamic attributes for compatibility.
     """
 
     SetupData: bytes  # Raw setup block bytes (`OffSetup .. OffImageOffsets`).

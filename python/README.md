@@ -40,11 +40,13 @@ with Cine(cine_path) as cine:
 
 Primary methods use snake_case:
 
+- `Cine(path, keep_annotations=True, remove_dead_pixels=False, debayer=False, dead_value=None, dead_is_threshold=True, bayer_pattern="auto")`
 - `open_cine_file(path)`
 - `load_frame(image_no, convert_bgr_to_rgb=False)`
 - `next_frame(increment=1, convert_bgr_to_rgb=False)`
 - `close_file()`
 - `replace_dead_pixels(dead_value=None, dead_is_threshold=True)`
+- `debayer_frame(bayer_pattern="auto")`
 - `average_frames(start_frame, end_frame, replace_dead_pixels=False, chunk_size=8)`
 - `mode_frames(start_frame, end_frame, replace_dead_pixels=False, method="auto", q_bg=0.80, k_sigma=2.5, min_keep=3, max_keep=96, stack_limit=128)`
 - `load_frames_batch(start_frame, count)`
@@ -64,6 +66,7 @@ Top-level aliases for frequently used metadata:
 - `cfa_code`
 - `bayer_pattern`
 - `image` / `frame` (aliases for latest pixel array)
+- `red_pixels` / `green_pixels` / `blue_pixels` (raw CFA color samples with `NaN` at other sites)
 
 Specification-aligned metadata blocks remain available:
 
@@ -86,17 +89,24 @@ Specification-aligned metadata blocks remain available:
 For large frame ranges:
 
 - Use `mode_frames(..., method="topk")` for bounded-memory robust background estimation.
-- Use `mode_frames(..., method="mad")` to match legacy quantile/MAD behavior.
+- Use `mode_frames(..., method="mad")` for quantile/MAD background estimation.
 - Keep `replace_dead_pixels=False` unless dead-pixel correction is required.
 - Reuse the same `Cine` object for repeated operations.
 - Tune `average_frames(..., chunk_size=...)` for your memory/CPU balance.
 - `mode_frames` now works on both mono and RGB frame stacks.
 
-Dead-pixel handling follows the CINE format guidance:
+Frame loading and image processing follow the CINE format guidance:
 
-- raw color (CFA/Bayer) cines are repaired in software by phase-aware correction (2x2 CFA split)
+- raw CFA/Bayer cines decode as 2D sensor mosaics by default, including packed 10-bit and normal 8/16-bit payloads
+- pass `debayer=True` to debayer every loaded frame, or call `debayer_frame()` on the current frame
+- pass `remove_dead_pixels=True` to repair dead pixels every time a frame is loaded
+- raw CFA/Bayer frames are repaired by phase-aware correction (2x2 CFA split)
 - interpolated color cines can be repaired channel-wise if needed
 - mono cines use standard 8-neighbor repair
+
+`red_pixels`, `green_pixels`, and `blue_pixels` are populated from the raw CFA
+sensor mosaic for color cines. They are not taken from the debayered RGB image;
+non-matching color sites are `NaN`.
 
 `mode_frames` options:
 

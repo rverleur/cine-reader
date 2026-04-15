@@ -27,7 +27,8 @@ build_mex_unpack10bit_cached
 ## Usage
 
 ```matlab
-cine = Cine(fullfile('<repo>', 'sample_data', 'TrimmedCine.cine'));
+cine = Cine(fullfile('<repo>', 'sample_data', 'TrimmedCine.cine'), ...
+    'RemoveDeadPixels', false, 'Debayer', false);
 first = cine.FileHeader.FirstImageNo;
 cine.LoadFrame(first);
 img = cine.PixelArray;
@@ -39,12 +40,19 @@ rgb = cine.GetFrameRGB(first, 'RGGB');
 cine.SaveFramesToNewFile('trimmed_out.cine', first, first+50);
 ```
 
+Color-enabled raw CFA/Bayer cines load as 2D sensor mosaics by default,
+including packed 10-bit and normal 8/16-bit payloads. Pass `'Debayer', true`
+to debayer every loaded frame, or call `DebayerFrame` on the current frame.
+`RedPixels`, `GreenPixels`, and `BluePixels` contain raw CFA samples with
+`NaN` at non-matching color sites.
+
 ## API Parity With Python
 
 The MATLAB class now includes:
 - `SaveFramesToNewFile`
 - `ModeFrames`
 - `GetFrameRGB`
+- `DebayerFrame`
 - existing methods (`LoadFrame`, `AverageFrames`, `ReplaceDeadPixels`, `LoadFramesBatch`)
 
 ## Internal Split
@@ -60,7 +68,7 @@ Heavy math helpers are split into `Matlab/private/`:
 
 - `AverageFrames(..., replace, chunk_size)` uses chunked accumulation; increase `chunk_size` on high-memory machines.
 - `ModeFrames(..., 'method', 'topk')` gives bounded-memory robust backgrounds for long ranges.
-- `ModeFrames(..., 'method', 'mad')` keeps legacy quantile/MAD behavior.
+- `ModeFrames(..., 'method', 'mad')` uses quantile/MAD background estimation.
 - Keep `replace=false` unless dead-pixel correction is required.
 
 `ModeFrames` name/value options:

@@ -5,19 +5,70 @@ from __future__ import annotations
 import numpy as np
 
 
+_NEIGHBOR_OFFSETS = (
+    (-1, -1), (-1, 0), (-1, 1),
+    (0, -1),           (0, 1),
+    (1, -1),  (1, 0),  (1, 1),
+)
+
+_BAYER_PHASE_ROLES = {
+    "RGGB": ((0, 0, "R"), (0, 1, "G_R"), (1, 0, "G_B"), (1, 1, "B")),
+    "BGGR": ((0, 0, "B"), (0, 1, "G_B"), (1, 0, "G_R"), (1, 1, "R")),
+    "GRBG": ((0, 0, "G_R"), (0, 1, "R"), (1, 0, "B"), (1, 1, "G_B")),
+    "GBRG": ((0, 0, "G_B"), (0, 1, "B"), (1, 0, "R"), (1, 1, "G_R")),
+}
+
+
+def _bayer_phase_roles(pattern: str) -> tuple[tuple[int, int, str], ...]:
+    token = pattern.upper()
+    try:
+        return _BAYER_PHASE_ROLES[token]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported Bayer pattern: {pattern}") from exc
+
+
 def _dead_mask(frame: np.ndarray, dead_value: int, *, dead_is_threshold: bool) -> np.ndarray:
     if dead_is_threshold:
         return frame >= dead_value
     return frame == dead_value
 
 
-def _replace_dead_pixels_mono_mask(frame: np.ndarray, dead_mask: np.ndarray) -> np.ndarray:
-    """Replace dead pixels in a 2D image from a precomputed dead-pixel mask."""
+def _repair_sparse_dead_pixels(frame: np.ndarray, dead_mask: np.ndarray, out: np.ndarray) -> None:
+    """Repair sparse dead pixels into `out` from valid 8-neighbor values."""
+    y_bad, x_bad = np.nonzero(dead_mask)
+    if y_bad.size == 0:
+        return
+
+    height, width = frame.shape
+    sums = np.zeros(y_bad.size, dtype=np.float32)
+    counts = np.zeros(y_bad.size, dtype=np.uint8)
+
+    for row_offset, col_offset in _NEIGHBOR_OFFSETS:
+        y_nbr = y_bad + row_offset
+        x_nbr = x_bad + col_offset
+        in_bounds = (y_nbr >= 0) & (y_nbr < height) & (x_nbr >= 0) & (x_nbr < width)
+        if not np.any(in_bounds):
+            continue
+
+        idx = np.nonzero(in_bounds)[0]
+        y_valid = y_nbr[idx]
+        x_valid = x_nbr[idx]
+        valid = ~dead_mask[y_valid, x_valid]
+        if not np.any(valid):
+            continue
+
+        valid_idx = idx[valid]
+        sums[valid_idx] += frame[y_valid[valid], x_valid[valid]]
+        counts[valid_idx] += 1
+
+    replace = counts > 0
+    if np.any(replace):
+        out[y_bad[replace], x_bad[replace]] = (sums[replace] / counts[replace]).astype(frame.dtype, copy=False)
+
+
+def _replace_dead_pixels_dense_mask(frame: np.ndarray, dead_mask: np.ndarray) -> np.ndarray:
+    """Dense vectorized repair path for images with many dead pixels."""
     if frame.ndim != 2:
-        return frame
-    if dead_mask.shape != frame.shape:
-        raise ValueError("dead_mask must have the same shape as frame")
-    if not np.any(dead_mask):
         return frame
 
     frame_f = frame.astype(np.float32, copy=False)
@@ -43,6 +94,25 @@ def _replace_dead_pixels_mono_mask(frame: np.ndarray, dead_mask: np.ndarray) -> 
     replace_mask = dead_mask & (nbr_cnt > 0)
     out[replace_mask] = nbr_sum[replace_mask] / nbr_cnt[replace_mask]
     return out.astype(frame.dtype, copy=False)
+
+
+def _replace_dead_pixels_mono_mask(frame: np.ndarray, dead_mask: np.ndarray) -> np.ndarray:
+    """Replace dead pixels in a 2D image from a precomputed dead-pixel mask."""
+    if frame.ndim != 2:
+        return frame
+    if dead_mask.shape != frame.shape:
+        raise ValueError("dead_mask must have the same shape as frame")
+
+    dead_count = int(np.count_nonzero(dead_mask))
+    if dead_count == 0:
+        return frame
+
+    if dead_count <= max(64, frame.size // 25):
+        out = frame.copy()
+        _repair_sparse_dead_pixels(frame, dead_mask, out)
+        return out
+
+    return _replace_dead_pixels_dense_mask(frame, dead_mask)
 
 
 def replace_dead_pixels_mono(
@@ -84,11 +154,27 @@ def replace_dead_pixels_bayer(
     if frame.ndim != 2:
         return frame
 
+    dead_mask = _dead_mask(frame, dead_value, dead_is_threshold=dead_is_threshold)
+    dead_count = int(np.count_nonzero(dead_mask))
+    if dead_count == 0:
+        return frame
+
+    if dead_count <= max(64, frame.size // 25):
+        out = frame.copy()
+        for row_phase in (0, 1):
+            for col_phase in (0, 1):
+                _repair_sparse_dead_pixels(
+                    frame[row_phase::2, col_phase::2],
+                    dead_mask[row_phase::2, col_phase::2],
+                    out[row_phase::2, col_phase::2],
+                )
+        return out
+
     out = frame.copy()
     for row_phase in (0, 1):
         for col_phase in (0, 1):
             sub = frame[row_phase::2, col_phase::2]
-            mask = _dead_mask(sub, dead_value, dead_is_threshold=dead_is_threshold)
+            mask = dead_mask[row_phase::2, col_phase::2]
             out[row_phase::2, col_phase::2] = _replace_dead_pixels_mono_mask(sub, mask)
     return out
 
@@ -157,9 +243,6 @@ def demosaic_bilinear(frame: np.ndarray, pattern: str = "RGGB") -> np.ndarray:
     input_dtype = frame.dtype
     frame_f = frame.astype(np.float32, copy=False)
     h, w = frame_f.shape
-    yy, xx = np.indices((h, w))
-    even_r = (yy % 2) == 0
-    even_c = (xx % 2) == 0
 
     pad = np.pad(frame_f, ((1, 1), (1, 1)), mode="edge")
     c = pad[1:-1, 1:-1]
@@ -172,54 +255,31 @@ def demosaic_bilinear(frame: np.ndarray, pattern: str = "RGGB") -> np.ndarray:
     dl = pad[2:, :-2]
     dr = pad[2:, 2:]
 
-    pattern = pattern.upper()
-    if pattern == "RGGB":
-        r_mask = even_r & even_c
-        b_mask = (~even_r) & (~even_c)
-        g_r_mask = even_r & (~even_c)
-        g_b_mask = (~even_r) & even_c
-    elif pattern == "BGGR":
-        b_mask = even_r & even_c
-        r_mask = (~even_r) & (~even_c)
-        g_b_mask = even_r & (~even_c)
-        g_r_mask = (~even_r) & even_c
-    elif pattern == "GRBG":
-        g_r_mask = even_r & even_c
-        r_mask = even_r & (~even_c)
-        b_mask = (~even_r) & even_c
-        g_b_mask = (~even_r) & (~even_c)
-    elif pattern == "GBRG":
-        g_b_mask = even_r & even_c
-        b_mask = even_r & (~even_c)
-        r_mask = (~even_r) & even_c
-        g_r_mask = (~even_r) & (~even_c)
-    else:
-        raise ValueError(f"Unsupported Bayer pattern: {pattern}")
-
-    r = np.zeros_like(frame_f, dtype=np.float32)
-    g = np.zeros_like(frame_f, dtype=np.float32)
-    b = np.zeros_like(frame_f, dtype=np.float32)
-
     g_cross = (up + dn + lf + rt) * 0.25
     rb_diag = (ul + ur + dl + dr) * 0.25
     lr = (lf + rt) * 0.5
     ud = (up + dn) * 0.5
 
-    r[r_mask] = c[r_mask]
-    g[r_mask] = g_cross[r_mask]
-    b[r_mask] = rb_diag[r_mask]
+    rgb = np.empty((h, w, 3), dtype=np.float32)
+    for row_phase, col_phase, role in _bayer_phase_roles(pattern):
+        rows = slice(row_phase, None, 2)
+        cols = slice(col_phase, None, 2)
+        if role == "R":
+            rgb[rows, cols, 0] = c[rows, cols]
+            rgb[rows, cols, 1] = g_cross[rows, cols]
+            rgb[rows, cols, 2] = rb_diag[rows, cols]
+        elif role == "B":
+            rgb[rows, cols, 0] = rb_diag[rows, cols]
+            rgb[rows, cols, 1] = g_cross[rows, cols]
+            rgb[rows, cols, 2] = c[rows, cols]
+        elif role == "G_R":
+            rgb[rows, cols, 0] = lr[rows, cols]
+            rgb[rows, cols, 1] = c[rows, cols]
+            rgb[rows, cols, 2] = ud[rows, cols]
+        else:
+            rgb[rows, cols, 0] = ud[rows, cols]
+            rgb[rows, cols, 1] = c[rows, cols]
+            rgb[rows, cols, 2] = lr[rows, cols]
 
-    b[b_mask] = c[b_mask]
-    g[b_mask] = g_cross[b_mask]
-    r[b_mask] = rb_diag[b_mask]
-
-    g[g_r_mask] = c[g_r_mask]
-    r[g_r_mask] = lr[g_r_mask]
-    b[g_r_mask] = ud[g_r_mask]
-
-    g[g_b_mask] = c[g_b_mask]
-    r[g_b_mask] = ud[g_b_mask]
-    b[g_b_mask] = lr[g_b_mask]
-
-    rgb = np.stack((r, g, b), axis=-1)
-    return np.rint(rgb).astype(input_dtype, copy=False)
+    np.rint(rgb, out=rgb)
+    return rgb.astype(input_dtype, copy=False)

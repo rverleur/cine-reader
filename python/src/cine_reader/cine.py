@@ -35,7 +35,17 @@ class Cine:
     methods and top-level aliases use snake_case.
     """
 
-    def __init__(self, filename: str | Path, keep_annotations: bool = True):
+    def __init__(
+        self,
+        filename: str | Path,
+        keep_annotations: bool = True,
+        *,
+        remove_dead_pixels: bool = False,
+        debayer: bool = False,
+        dead_value: int | None = None,
+        dead_is_threshold: bool = True,
+        bayer_pattern: str = "auto",
+    ):
         """Create and open a CINE file reader.
 
         Parameters
@@ -45,9 +55,27 @@ class Cine:
         keep_annotations:
             If `True`, keep per-frame annotation payload bytes available in
             `annotation_data` and `annotation`.
+        remove_dead_pixels:
+            If `True`, dead-pixel repair is applied every time a frame is loaded.
+        debayer:
+            If `True`, raw color CFA/Bayer frames are debayered every time a
+            frame is loaded.
+        dead_value:
+            Optional dead-pixel marker/threshold used when `remove_dead_pixels`
+            is enabled. If `None`, it is inferred from setup metadata.
+        dead_is_threshold:
+            If `True`, values `>= dead_value` are repaired.
+        bayer_pattern:
+            Bayer layout token for debayering. Use `"auto"` to infer from setup
+            `CFA`.
         """
         self.filename = str(filename)
         self.keep_annotations = bool(keep_annotations)
+        self.remove_dead_pixels = bool(remove_dead_pixels)
+        self.debayer = bool(debayer)
+        self.dead_value = dead_value
+        self.dead_is_threshold = bool(dead_is_threshold)
+        self.bayer_pattern_mode = str(bayer_pattern)
 
         self.file_handle: BinaryIO | None = None
         self.file_header: CineHeader | None = None
@@ -58,11 +86,16 @@ class Cine:
         self.current_frame: int | None = None
         self.pixel_array: np.ndarray | None = None
         self.pixel_data: np.ndarray | None = None
+        self.red_pixels: np.ndarray | None = None
+        self.green_pixels: np.ndarray | None = None
+        self.blue_pixels: np.ndarray | None = None
         self.annotation_size: int = 0
         self.annotation_data: bytes = b""
         self.annotation: bytes = b""
         self.image_size: int = 0
         self.image_data: bytes = b""
+        self._pixel_array_channel_order: str | None = None
+        self._color_samples_from_raw_cfa = False
 
         self._recording_datetime: datetime | None = None
 
@@ -155,6 +188,8 @@ class Cine:
     def image(self, value: np.ndarray) -> None:
         self.pixel_array = np.asarray(value)
         self.pixel_data = self.pixel_array.reshape(-1)
+        self._pixel_array_channel_order = "RGB" if self.pixel_array.ndim == 3 else None
+        self._update_color_sample_arrays(self.pixel_array)
 
     @property
     def frame(self) -> np.ndarray:
@@ -288,11 +323,25 @@ class Cine:
             raise EOFError("Unexpected EOF while reading frame payload")
         self.image_data = image_data
 
-        self.pixel_array = self._decode_frame(image_data)
+        frame = self._decode_frame(image_data)
+
+        if self.remove_dead_pixels:
+            frame = self._repair_dead_pixels_array(frame)
+
+        self._pixel_array_channel_order = None
+        self._update_color_sample_arrays(frame)
+
+        if self.debayer and self._is_raw_bayer_frame(frame):
+            frame = self._debayer_array(frame, bayer_pattern=self.bayer_pattern_mode)
+
+        self.pixel_array = frame
+        self._pixel_array_channel_order = self._decoded_channel_order(self.pixel_array)
         self.pixel_data = self.pixel_array.reshape(-1)
 
-        if convert_bgr_to_rgb and self.pixel_array.ndim == 3:
+        if convert_bgr_to_rgb and self._pixel_array_channel_order == "BGR":
             self.pixel_array = self.pixel_array[..., ::-1].copy()
+            self._pixel_array_channel_order = "RGB"
+            self._update_color_sample_arrays(self.pixel_array)
             self.pixel_data = self.pixel_array.reshape(-1)
 
     def replace_dead_pixels(
@@ -313,13 +362,36 @@ class Cine:
             If `False`, repair pixels where value equals `dead_value`.
         """
         frame = self._require_pixel_array()
-        resolved_dead = self._resolve_dead_value(dead_value)
-        self.pixel_array = repair_dead_pixels(
+        self.pixel_array = self._repair_dead_pixels_array(
             frame,
-            dead_value=resolved_dead,
+            dead_value=dead_value,
             dead_is_threshold=dead_is_threshold,
-            bayer_raw=self._is_raw_bayer_frame(frame),
         )
+        if not (self.pixel_array.ndim == 3 and self._color_samples_from_raw_cfa):
+            self._update_color_sample_arrays(self.pixel_array)
+        self.pixel_data = self.pixel_array.reshape(-1)
+
+    def debayer_frame(self, *, bayer_pattern: str = "auto") -> None:
+        """Debayer the currently loaded raw CFA/Bayer frame in-place.
+
+        This mutates `pixel_array` to an RGB `[H, W, 3]` image. Raw CFA sample
+        arrays (`red_pixels`, `green_pixels`, `blue_pixels`) remain based on the
+        pre-debayer sensor mosaic.
+        """
+        frame = self._require_pixel_array()
+        if frame.ndim == 3:
+            if self._pixel_array_channel_order == "BGR":
+                self.pixel_array = frame[..., ::-1].copy()
+                self._pixel_array_channel_order = "RGB"
+                self._update_color_sample_arrays(self.pixel_array)
+                self.pixel_data = self.pixel_array.reshape(-1)
+            return
+        if not self._is_raw_bayer_frame(frame):
+            raise ValueError("Current frame is not a raw color CFA/Bayer frame.")
+
+        self._update_color_sample_arrays(frame)
+        self.pixel_array = self._debayer_array(frame, bayer_pattern=bayer_pattern)
+        self._pixel_array_channel_order = "RGB"
         self.pixel_data = self.pixel_array.reshape(-1)
 
     def save_frames_to_new_file(self, output_filename: str | Path, start_frame: int, end_frame: int) -> None:
@@ -501,7 +573,8 @@ class Cine:
         -------
         numpy.ndarray
             Stacked array with frame dimension on the last axis.
-            Mono: `[H, W, N]`; color: `[H, W, 3, N]`.
+            Mono/raw CFA: `[H, W, N]`; debayered/interpolated color:
+            `[H, W, 3, N]`.
         """
         if count <= 0:
             raise ValueError("count must be > 0")
@@ -539,7 +612,9 @@ class Cine:
 
         frame = self._require_pixel_array()
         if frame.ndim == 3:
-            return frame[..., ::-1].copy()
+            if self._pixel_array_channel_order == "BGR":
+                return frame[..., ::-1].copy()
+            return frame.copy()
         if frame.ndim == 2:
             pattern = self._resolve_bayer_pattern(bayer_pattern) or "RGGB"
             return demosaic_bilinear(frame, pattern=pattern)
@@ -556,6 +631,93 @@ class Cine:
             real_bpp=int(setup.RealBPP),
             unpack_10bit_fn=unpack_10bit_data,
         )
+
+    def _repair_dead_pixels_array(
+        self,
+        frame: np.ndarray,
+        *,
+        dead_value: int | None = None,
+        dead_is_threshold: bool | None = None,
+    ) -> np.ndarray:
+        resolved_dead = self._resolve_dead_value(self.dead_value if dead_value is None else dead_value)
+        resolved_threshold = self.dead_is_threshold if dead_is_threshold is None else bool(dead_is_threshold)
+        return repair_dead_pixels(
+            frame,
+            dead_value=resolved_dead,
+            dead_is_threshold=resolved_threshold,
+            bayer_raw=self._is_raw_bayer_frame(frame),
+        )
+
+    def _debayer_array(self, frame: np.ndarray, *, bayer_pattern: str = "auto") -> np.ndarray:
+        pattern = self._resolve_bayer_pattern(bayer_pattern) or "RGGB"
+        return demosaic_bilinear(frame, pattern=pattern)
+
+    def _update_color_sample_arrays(self, frame: np.ndarray) -> None:
+        self._color_samples_from_raw_cfa = False
+
+        if self._is_raw_bayer_frame(frame):
+            pattern = self._resolve_bayer_pattern(self.bayer_pattern_mode) or "RGGB"
+            red, green, blue = self._raw_cfa_sample_arrays(frame.shape)
+            for row_phase, col_phase, channel in self._bayer_color_phases(pattern):
+                rows = slice(row_phase, None, 2)
+                cols = slice(col_phase, None, 2)
+                if channel == "R":
+                    red[rows, cols] = frame[rows, cols]
+                elif channel == "G":
+                    green[rows, cols] = frame[rows, cols]
+                else:
+                    blue[rows, cols] = frame[rows, cols]
+            self.red_pixels = red
+            self.green_pixels = green
+            self.blue_pixels = blue
+            self._color_samples_from_raw_cfa = True
+            return
+
+        self.red_pixels = None
+        self.green_pixels = None
+        self.blue_pixels = None
+
+        if frame.ndim == 3 and frame.shape[-1] >= 3:
+            image_header = self._require_image_header()
+            channels = frame
+            if int(image_header.biBitCount) in (24, 48) and self._pixel_array_channel_order != "RGB":
+                channels = frame[..., ::-1]
+            self.red_pixels = channels[..., 0].astype(np.float32, copy=True)
+            self.green_pixels = channels[..., 1].astype(np.float32, copy=True)
+            self.blue_pixels = channels[..., 2].astype(np.float32, copy=True)
+
+    def _raw_cfa_sample_arrays(self, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        arrays = []
+        for current in (self.red_pixels, self.green_pixels, self.blue_pixels):
+            if current is not None and current.shape == shape and current.dtype == np.float32:
+                sample = current
+                sample.fill(np.nan)
+            else:
+                sample = np.full(shape, np.nan, dtype=np.float32)
+            arrays.append(sample)
+        return arrays[0], arrays[1], arrays[2]
+
+    @staticmethod
+    def _bayer_color_phases(pattern: str) -> tuple[tuple[int, int, str], ...]:
+        token = pattern.upper()
+        mapping = {
+            "RGGB": ((0, 0, "R"), (0, 1, "G"), (1, 0, "G"), (1, 1, "B")),
+            "BGGR": ((0, 0, "B"), (0, 1, "G"), (1, 0, "G"), (1, 1, "R")),
+            "GRBG": ((0, 0, "G"), (0, 1, "R"), (1, 0, "B"), (1, 1, "G")),
+            "GBRG": ((0, 0, "G"), (0, 1, "B"), (1, 0, "R"), (1, 1, "G")),
+        }
+        try:
+            return mapping[token]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported Bayer pattern: {pattern}") from exc
+
+    def _decoded_channel_order(self, frame: np.ndarray) -> str | None:
+        if frame.ndim != 3:
+            return None
+        image_header = self._require_image_header()
+        if int(image_header.biBitCount) in (24, 48):
+            return "BGR"
+        return "RGB"
 
     def _validate_frame_range(self, start_frame: int, end_frame: int) -> tuple[int, int]:
         header = self._require_file_header()
@@ -577,7 +739,7 @@ class Cine:
         replace = self.replace_dead_pixels
         for frame_no in range(start_frame, end_frame + 1):
             load_frame(frame_no)
-            if replace_dead_pixels:
+            if replace_dead_pixels and not self.remove_dead_pixels:
                 replace()
             yield self._require_pixel_array()
 
@@ -588,7 +750,8 @@ class Cine:
         image_header = self._require_image_header()
         if int(image_header.biBitCount) not in (8, 16):
             return False
-        return self.cfa_code != 0
+        setup = self._require_camera_setup()
+        return bool(getattr(setup, "bEnableColor", False)) and self.cfa_code != 0
 
     def _resolve_bayer_pattern(self, bayer_pattern: str = "auto") -> str | None:
         """Resolve Bayer pattern from explicit token or setup CFA code."""

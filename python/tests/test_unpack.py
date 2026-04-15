@@ -7,7 +7,13 @@ from cine_reader.unpack import unpack_10bit_data, unpack_10bit_numpy
 
 
 def _pack_group(v0: int, v1: int, v2: int, v3: int) -> bytes:
-    combined = ((v0 & 0x3FF) << 30) | ((v1 & 0x3FF) << 20) | ((v2 & 0x3FF) << 10) | (v3 & 0x3FF)
+    v0, v1, v2, v3 = int(v0), int(v1), int(v2), int(v3)
+    combined = (
+        ((v0 & 0x3FF) << 30)
+        | ((v1 & 0x3FF) << 20)
+        | ((v2 & 0x3FF) << 10)
+        | (v3 & 0x3FF)
+    )
     return bytes(
         (
             (combined >> 32) & 0xFF,

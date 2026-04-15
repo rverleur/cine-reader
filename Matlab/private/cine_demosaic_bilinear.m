@@ -9,9 +9,6 @@ end
 inClass = class(frame);
 frame = single(frame);
 [h,w] = size(frame);
-[yy,xx] = ndgrid(0:h-1, 0:w-1);
-evenR = mod(yy,2)==0;
-evenC = mod(xx,2)==0;
 
 pad = frame([1,1:h,h], [1,1:w,w]);
 c  = pad(2:end-1, 2:end-1);
@@ -25,41 +22,49 @@ dl = pad(3:end  , 1:end-2);
 dr = pad(3:end  , 3:end  );
 
 p = upper(string(pattern));
-if p=="RGGB"
-    rMask = evenR & evenC;
-    bMask = ~evenR & ~evenC;
-    gRMask = evenR & ~evenC;
-    gBMask = ~evenR & evenC;
-elseif p=="BGGR"
-    bMask = evenR & evenC;
-    rMask = ~evenR & ~evenC;
-    gBMask = evenR & ~evenC;
-    gRMask = ~evenR & evenC;
-elseif p=="GRBG"
-    gRMask = evenR & evenC;
-    rMask = evenR & ~evenC;
-    bMask = ~evenR & evenC;
-    gBMask = ~evenR & ~evenC;
-elseif p=="GBRG"
-    gBMask = evenR & evenC;
-    bMask = evenR & ~evenC;
-    rMask = ~evenR & evenC;
-    gRMask = ~evenR & ~evenC;
-else
-    error('Unsupported Bayer pattern: %s', char(p));
+switch p
+    case "RGGB"
+        phases = {1, 1, 'R'; 1, 2, 'G_R'; 2, 1, 'G_B'; 2, 2, 'B'};
+    case "BGGR"
+        phases = {1, 1, 'B'; 1, 2, 'G_B'; 2, 1, 'G_R'; 2, 2, 'R'};
+    case "GRBG"
+        phases = {1, 1, 'G_R'; 1, 2, 'R'; 2, 1, 'B'; 2, 2, 'G_B'};
+    case "GBRG"
+        phases = {1, 1, 'G_B'; 1, 2, 'B'; 2, 1, 'R'; 2, 2, 'G_R'};
+    otherwise
+        error('Unsupported Bayer pattern: %s', char(p));
 end
 
-r = zeros(h,w,'single'); g = r; b = r;
 gCross = (up + dn + lf + rt) * 0.25;
 rbDiag = (ul + ur + dl + dr) * 0.25;
 lr = (lf + rt) * 0.5;
 ud = (up + dn) * 0.5;
 
-r(rMask) = c(rMask);   g(rMask) = gCross(rMask); b(rMask) = rbDiag(rMask);
-b(bMask) = c(bMask);   g(bMask) = gCross(bMask); r(bMask) = rbDiag(bMask);
-g(gRMask) = c(gRMask); r(gRMask) = lr(gRMask);   b(gRMask) = ud(gRMask);
-g(gBMask) = c(gBMask); r(gBMask) = ud(gBMask);   b(gBMask) = lr(gBMask);
+rgb = zeros(h, w, 3, 'single');
+for k = 1:size(phases, 1)
+    rows = phases{k, 1}:2:h;
+    cols = phases{k, 2}:2:w;
+    role = phases{k, 3};
 
-rgb = cat(3, r, g, b);
+    switch role
+        case 'R'
+            rgb(rows, cols, 1) = c(rows, cols);
+            rgb(rows, cols, 2) = gCross(rows, cols);
+            rgb(rows, cols, 3) = rbDiag(rows, cols);
+        case 'B'
+            rgb(rows, cols, 1) = rbDiag(rows, cols);
+            rgb(rows, cols, 2) = gCross(rows, cols);
+            rgb(rows, cols, 3) = c(rows, cols);
+        case 'G_R'
+            rgb(rows, cols, 1) = lr(rows, cols);
+            rgb(rows, cols, 2) = c(rows, cols);
+            rgb(rows, cols, 3) = ud(rows, cols);
+        case 'G_B'
+            rgb(rows, cols, 1) = ud(rows, cols);
+            rgb(rows, cols, 2) = c(rows, cols);
+            rgb(rows, cols, 3) = lr(rows, cols);
+    end
+end
+
 rgb = cast(round(rgb), inClass);
 end

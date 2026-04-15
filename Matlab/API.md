@@ -3,20 +3,31 @@
 ## Construction and Lifecycle
 
 ```matlab
-cine = Cine(fullfile('<repo>', 'sample_data', 'TrimmedCine.cine'));
+cine = Cine(fullfile('<repo>', 'sample_data', 'TrimmedCine.cine'), ...
+    'RemoveDeadPixels', false, 'Debayer', false);
 first = cine.FileHeader.FirstImageNo;
 cine.LoadFrame(first);
 img = cine.PixelArray;
 ```
 
+- `Cine(filename, 'RemoveDeadPixels', false, 'Debayer', false, 'DeadValue', [], 'BayerPattern', 'auto')`
+  - `'RemoveDeadPixels'`: repair dead pixels on every `LoadFrame`.
+  - `'Debayer'`: debayer raw CFA/Bayer frames on every `LoadFrame`.
 - `OpenCineFile(filename)`
 - `LoadFrame(frame_no)`
+  - raw CFA/Bayer payloads stay 2D unless `'Debayer', true` or `DebayerFrame` is used.
 - `NextFrame(increment)`
 - `CloseFile()`
+- `RedPixels` / `GreenPixels` / `BluePixels`
+  - empty for mono frames.
+  - for raw CFA/Bayer color frames, `[H x W]` single arrays with actual sensor samples at that color's sites and `NaN` elsewhere.
 
 ## Processing
 
 - `ReplaceDeadPixels(dead_value)`
+  - repairs mono frames directly and RGB frames channel-wise.
+- `DebayerFrame(bayer_pattern)`
+  - mutates the current raw CFA/Bayer `PixelArray` into RGB `[H x W x 3]`.
 - `GetFrameRGB(frame_no, bayer_pattern)`
 
 ## Statistics

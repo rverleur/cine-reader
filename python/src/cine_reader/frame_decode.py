@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 
 
-
 def decode_frame_payload(
     raw: bytes,
     *,
@@ -35,7 +34,8 @@ def decode_frame_payload(
     Returns
     -------
     numpy.ndarray
-        2D mono frame or 3D color frame.
+        Decoded frame payload. Raw CFA color frames remain 2D sensor mosaics;
+        debayering is handled by `Cine`.
     """
     height = abs(int(height_signed))
     channels = 1 if bit_count in (8, 16) else 3

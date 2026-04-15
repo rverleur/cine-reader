@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from cine_reader.image_ops import (
+    demosaic_bilinear,
     replace_dead_pixels,
     replace_dead_pixels_bayer,
     replace_dead_pixels_mono,
@@ -73,3 +74,23 @@ def test_replace_dead_pixels_dispatch_handles_bayer_and_rgb() -> None:
     rgb[0, 0, 1] = 4095
     out_rgb = replace_dead_pixels(rgb, dead_value=4095)
     assert out_rgb[0, 0, 1] == 22
+
+
+def test_demosaic_bilinear_preserves_known_bayer_sites() -> None:
+    frame = np.arange(35, dtype=np.uint16).reshape(5, 7)
+    roles = {
+        "RGGB": ((0, 0, 0), (0, 1, 1), (1, 0, 1), (1, 1, 2)),
+        "BGGR": ((0, 0, 2), (0, 1, 1), (1, 0, 1), (1, 1, 0)),
+        "GRBG": ((0, 0, 1), (0, 1, 0), (1, 0, 2), (1, 1, 1)),
+        "GBRG": ((0, 0, 1), (0, 1, 2), (1, 0, 0), (1, 1, 1)),
+    }
+
+    for pattern, phase_channels in roles.items():
+        rgb = demosaic_bilinear(frame, pattern)
+        assert rgb.shape == frame.shape + (3,)
+        assert rgb.dtype == frame.dtype
+        for row_phase, col_phase, channel in phase_channels:
+            assert np.array_equal(
+                rgb[row_phase::2, col_phase::2, channel],
+                frame[row_phase::2, col_phase::2],
+            )

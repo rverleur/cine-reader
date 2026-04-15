@@ -52,4 +52,4 @@ See `Matlab/README.md` for setup, MEX build, and examples.
 - Packed 10-bit decode prefers bundled native libraries (`.dll/.so/.dylib`) and falls back to a NumPy decoder if a native library is unavailable.
 - Reference format document is at `docs/reference/Cine File Format.pdf`.
 - `sample_data/TrimmedCine.cine` is a local large test file and is gitignored by default.
-- Frame statistics now support two robust-mode paths: legacy quantile/MAD (`method=\"mad\"`) and low-memory top-k (`method=\"topk\"`).
+- Frame statistics support two robust-mode paths: quantile/MAD (`method=\"mad\"`) and low-memory top-k (`method=\"topk\"`).

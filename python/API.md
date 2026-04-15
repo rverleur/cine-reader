@@ -10,6 +10,10 @@ with Cine("sample_data/TrimmedCine.cine") as cine:
     frame = cine.image
 ```
 
+- `Cine(filename, keep_annotations=True, remove_dead_pixels=False, debayer=False, dead_value=None, dead_is_threshold=True, bayer_pattern="auto")`
+  - `remove_dead_pixels`: when `True`, repair dead pixels on every `load_frame`.
+  - `debayer`: when `True`, debayer raw CFA/Bayer frames on every `load_frame`.
+  - `bayer_pattern`: `auto` or one of `RGGB`, `BGGR`, `GRBG`, `GBRG`.
 - `open_cine_file(filename)`
   - `filename`: path to `.cine`.
 - `close_file()`
@@ -24,12 +28,16 @@ with Cine("sample_data/TrimmedCine.cine") as cine:
   - `increment`: frame-number step (can be negative).
 - `image` / `frame`
   - alias for latest decoded pixel array (`pixel_array`).
+  - raw CFA/Bayer payloads remain 2D unless `debayer=True` or `debayer_frame()` is used.
+- `red_pixels` / `green_pixels` / `blue_pixels`
+  - `None` for mono frames.
+  - for raw CFA/Bayer color frames, `[H, W]` float arrays with actual sensor samples at that color's sites and `NaN` elsewhere.
 - `load_frames_batch(start_frame, count)`
   - `start_frame`: first frame number in range.
   - `count`: number of consecutive frames.
   - output shape:
-    - mono: `[H, W, N]`
-    - color: `[H, W, 3, N]`
+    - mono or raw CFA: `[H, W, N]`
+    - debayered/interpolated color: `[H, W, 3, N]`
 
 ## Image Processing
 
@@ -40,6 +48,8 @@ with Cine("sample_data/TrimmedCine.cine") as cine:
     - mono 2D: 8-neighbor repair
     - raw Bayer/CFA 2D: repair each 2x2 phase separately before demosaic
     - RGB/BGR 3D: repair each channel independently
+- `debayer_frame(bayer_pattern="auto")`
+  - mutates the current raw CFA/Bayer `pixel_array` into RGB `[H, W, 3]`.
 - `get_frame_rgb(image_no=None, bayer_pattern="auto")`
   - `image_no`: optional frame number to load first.
   - `bayer_pattern`: `auto` or one of `RGGB`, `BGGR`, `GRBG`, `GBRG`.
