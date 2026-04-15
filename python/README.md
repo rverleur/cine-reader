@@ -1,11 +1,15 @@
 # Python Package (`cine_reader`)
 
-## Install
+### Install
 
-From GitHub:
+Download the wheel from the latest release, then install it with:
 
 ```bash
-pip install "git+https://github.com/<your-user>/<your-repo>.git"
+pip install cine_reader-0.1.0-py3-none-any.whl
+```
+Or install directly from the release asset URL:
+```bash
+pip install https://github.com/rverleur/cine-reader/releases/download/v0.1.0/cine_reader-0.1.0-py3-none-any.whl
 ```
 
 From local checkout:
