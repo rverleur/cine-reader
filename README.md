@@ -27,16 +27,16 @@ This repository contains:
 └── docs/reference/Cine File Format.pdf
 ```
 
-## Python Install
+### Python install
+
+Download the wheel from the latest release, then install it with:
 
 ```bash
-pip install "git+https://github.com/rverleur/cine-reader.git"
+pip install cine_reader-0.1.0-py3-none-any.whl
 ```
-
-Editable local install:
-
+Or install directly from the release asset URL:
 ```bash
-pip install -e .
+pip install https://github.com/rverleur/cine-reader/releases/download/v0.1.0/cine_reader-0.1.0-py3-none-any.whl
 ```
 
 See `python/README.md` for full Python usage and testing.
