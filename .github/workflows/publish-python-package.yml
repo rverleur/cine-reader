@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/cine-reader
+      url: https://pypi.org/project/cine-handler/
     permissions:
       id-token: write
 

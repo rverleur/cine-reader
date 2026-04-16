@@ -1,7 +1,8 @@
-# cine-reader
+# cine-handler
 
-`cine-reader` is a Python package for reading Vision Research Phantom `.cine`
-files on macOS, Linux, and Windows.
+`cine-handler` is the PyPI distribution for the `cine_reader` Python package,
+which reads Vision Research Phantom `.cine` files on macOS, Linux, and
+Windows.
 
 The PyPI distribution contains only the Python package. The repository also
 includes a separate MATLAB implementation that stays in GitHub:
@@ -16,7 +17,7 @@ includes a separate MATLAB implementation that stays in GitHub:
 Install from PyPI:
 
 ```bash
-pip install cine-reader
+pip install cine-handler
 ```
 
 Development install from GitHub:
@@ -305,7 +306,7 @@ The wheel ships with runtime unpack libraries for packed 10-bit payloads:
 - `unpack_data_elf64.so`
 - `unpack_data_arm64.dylib`
 
-If no matching helper can be loaded, `cine-reader` falls back to the NumPy
+If no matching helper can be loaded, `cine-handler` falls back to the NumPy
 decoder automatically.
 
 ## MATLAB Implementation

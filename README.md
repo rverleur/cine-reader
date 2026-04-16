@@ -15,10 +15,13 @@ This repository contains:
 
 ## Python Installation
 
+The PyPI distribution name is `cine-handler`. The import package remains
+`cine_reader`.
+
 Preferred once the package is published on PyPI:
 
 ```bash
-pip install cine-reader
+pip install cine-handler
 ```
 
 You can also install from a GitHub release, from the Git repo, or from a
@@ -28,23 +31,23 @@ local checkout.
 
 1. Open the Releases page for the repo.
 2. Download the wheel for the release you want:
-   `cine_reader-X.Y.Z-py3-none-any.whl`
+   `cine_handler-X.Y.Z-py3-none-any.whl`
 3. Install it with:
 
 ```bash
-pip install cine_reader-X.Y.Z-py3-none-any.whl
+pip install cine_handler-X.Y.Z-py3-none-any.whl
 ```
 
 You can also install directly from a release asset URL:
 
 ```bash
-pip install "https://github.com/rverleur/cine-reader/releases/download/vX.Y.Z/cine_reader-X.Y.Z-py3-none-any.whl"
+pip install "https://github.com/rverleur/cine-reader/releases/download/vX.Y.Z/cine_handler-X.Y.Z-py3-none-any.whl"
 ```
 
 You can install the source distribution from the release too:
 
 ```bash
-pip install cine_reader-X.Y.Z.tar.gz
+pip install cine_handler-X.Y.Z.tar.gz
 ```
 
 ### Install the latest GitHub version

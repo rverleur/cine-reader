@@ -7,6 +7,8 @@ graft python/examples
 graft python/tests
 include python/README.md
 include python/API.md
+prune python/src/cine_reader.egg-info
+prune python/src/cine_handler.egg-info
 prune Matlab
 prune c_src
 prune docs
