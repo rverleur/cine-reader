@@ -25,7 +25,9 @@ img = cine.PixelArray;
 ## Processing
 
 - `ReplaceDeadPixels(dead_value)`
-  - repairs mono frames directly and RGB frames channel-wise.
+  - repairs mono frames directly
+  - repairs raw CFA/Bayer frames by 2x2 phase before demosaic
+  - repairs RGB frames channel-wise
 - `DebayerFrame(bayer_pattern)`
   - mutates the current raw CFA/Bayer `PixelArray` into RGB `[H x W x 3]`.
 - `GetFrameRGB(frame_no, bayer_pattern)`

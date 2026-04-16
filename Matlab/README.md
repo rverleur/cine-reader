@@ -1,82 +1,126 @@
 # MATLAB Reader
 
-This folder contains the MATLAB implementation (`Cine.m`) and MEX/C-library helpers.
+This folder contains the MATLAB implementation of the Phantom `.cine` reader.
 
-## Setup
+Repository:
 
-1. Add this folder to MATLAB path:
+- `https://github.com/rverleur/cine-reader`
+
+The public MATLAB entry point is:
+
+- `Matlab/Cine.m`
+
+## Installation and Setup
+
+MATLAB support is not installed by the Python wheel. Use it directly from a
+repository checkout or from a source archive downloaded from GitHub.
+
+### 1. Get the repository
+
+Clone the repo or download a release source archive from GitHub:
+
+```text
+https://github.com/rverleur/cine-reader
+```
+
+### 2. Add `Matlab/` to the MATLAB path
 
 ```matlab
 addpath(genpath('<repo>/Matlab'))
 ```
 
-2. Ensure native unpack library files exist under `C_Files/`:
-- `unpack_data_win64.dll` or `unpack_data_win32.dll`
-- `unpack_data_arm64.dylib`
+### 3. Check packed 10-bit support
+
+Runtime unpack libraries are expected under `Matlab/C_Files/`:
+
+- `unpack_data_win32.dll`
+- `unpack_data_win64.dll`
 - `unpack_data_elf64.so`
+- `unpack_data_arm64.dylib`
 
-3. Ensure `private/mex_unpack10bit_cached` is built for your MATLAB version.
+For packed 10-bit MATLAB decoding, you should also build
+`private/mex_unpack10bit_cached` for your local MATLAB version and platform.
 
-## Build MEX (if needed)
+Build it from the MATLAB folder:
 
 ```matlab
 cd('<repo>/Matlab')
 build_mex_unpack10bit_cached
 ```
 
-## Usage
+For standard unpacked 8-bit, 16-bit, 24-bit, and 48-bit payloads, the MEX file
+is not needed.
+
+## Quick Start
 
 ```matlab
 cine = Cine(fullfile('<repo>', 'sample_data', 'TrimmedCine.cine'), ...
     'RemoveDeadPixels', false, 'Debayer', false);
+
 first = cine.FileHeader.FirstImageNo;
+
 cine.LoadFrame(first);
-img = cine.PixelArray;
+frame = cine.PixelArray;
 
-avg = cine.AverageFrames(first, first+10, false);
-bg  = cine.ModeFrames(first, first+20, false, 'method', 'auto');
+avg = cine.AverageFrames(first, first + 10, false);
+bg = cine.ModeFrames(first, first + 20, false, 'method', 'auto');
 rgb = cine.GetFrameRGB(first, 'RGGB');
-
-cine.SaveFramesToNewFile('trimmed_out.cine', first, first+50);
 ```
 
-Color-enabled raw CFA/Bayer cines load as 2D sensor mosaics by default,
-including packed 10-bit and normal 8/16-bit payloads. Pass `'Debayer', true`
-to debayer every loaded frame, or call `DebayerFrame` on the current frame.
-`RedPixels`, `GreenPixels`, and `BluePixels` contain raw CFA samples with
-`NaN` at non-matching color sites.
+## Current Frame Behavior
 
-## API Parity With Python
+The MATLAB reader matches the Python behavior:
 
-The MATLAB class now includes:
-- `SaveFramesToNewFile`
-- `ModeFrames`
-- `GetFrameRGB`
-- `DebayerFrame`
-- existing methods (`LoadFrame`, `AverageFrames`, `ReplaceDeadPixels`, `LoadFramesBatch`)
+- mono cines load as 2D arrays
+- raw color CFA/Bayer cines load as 2D sensor mosaics by default
+- interpolated color payloads load as 3-channel arrays
+- `'Debayer', true` debayers raw CFA/Bayer frames on every `LoadFrame`
+- `'RemoveDeadPixels', true` repairs pixels on every `LoadFrame`
 
-## Internal Split
+For raw color CFA/Bayer frames:
 
-Heavy math helpers are split into `Matlab/private/`:
-- `Matlab/private/cine_replace_dead_pixels.m`
-- `Matlab/private/cine_demosaic_bilinear.m`
-- `Matlab/private/cine_mode_mad_stack.m`
+- `RedPixels`
+- `GreenPixels`
+- `BluePixels`
 
-`Cine.m` remains the public entry point and orchestrates file I/O.
+are `[H x W]` `single` arrays with actual sensor samples at the matching color
+sites and `NaN` elsewhere. These are taken from the raw sensor mosaic, not from
+the debayered RGB image.
 
-## Performance Hints
+## Main MATLAB API
 
-- `AverageFrames(..., replace, chunk_size)` uses chunked accumulation; increase `chunk_size` on high-memory machines.
-- `ModeFrames(..., 'method', 'topk')` gives bounded-memory robust backgrounds for long ranges.
-- `ModeFrames(..., 'method', 'mad')` uses quantile/MAD background estimation.
-- Keep `replace=false` unless dead-pixel correction is required.
+- `Cine(filename, 'RemoveDeadPixels', false, 'Debayer', false, 'DeadValue', [], 'BayerPattern', 'auto')`
+- `OpenCineFile(filename)`
+- `LoadFrame(frame_no)`
+- `NextFrame(increment)`
+- `CloseFile()`
+- `ReplaceDeadPixels(dead_value)`
+- `DebayerFrame(bayer_pattern)`
+- `GetFrameRGB(frame_no, bayer_pattern)`
+- `AverageFrames(start_frame, end_frame, replace, chunk_size)`
+- `ModeFrames(start_frame, end_frame, replace, 'name', value, ...)`
+- `LoadFramesBatch(start_frame, count)`
+- `SaveFramesToNewFile(output_filename, start_frame, end_frame)`
 
-`ModeFrames` name/value options:
-- `'method'`: `'auto' | 'mad' | 'topk'`
-- `'q_bg'`: bright quantile baseline (default `0.80`)
-- `'k_sigma'`: MAD rejection scale for `mad` (default `2.5`)
-- `'min_keep'`: minimum accepted samples (default `3`)
-- `'max_keep'`: cap for `topk` memory (default `96`, or `[]` for no cap)
-- `'stack_limit'`: `auto` threshold for switching to `topk` (default `128`)
+## Internal Files
+
+Heavy math and decode helpers are split into `Matlab/private/`:
+
+- `cine_replace_dead_pixels.m`
+- `cine_demosaic_bilinear.m`
+- `cine_mode_mad_stack.m`
+- `mex_unpack10bit.c`
+- `mex_unpack10bit_cached.c`
+
+Runtime shared libraries are in `Matlab/C_Files/`.
+
+## Performance Notes
+
+- `AverageFrames(..., chunk_size)` uses chunked accumulation to reduce overhead.
+- `ModeFrames(..., 'method', 'topk')` keeps memory bounded for longer ranges.
+- `ModeFrames(..., 'method', 'mad')` uses quantile/MAD rejection on a full
+  stack.
+- Dead-pixel repair and debayering are optional and add per-frame processing
+  cost.
 
 Detailed API notes are in `Matlab/API.md`.
