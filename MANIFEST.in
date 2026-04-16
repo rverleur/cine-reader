@@ -1,10 +1,17 @@
 include README.md
-recursive-include python *.md
-recursive-include Matlab *.md
-recursive-include python/src/cine_reader/libs *.dll *.so *.dylib
-recursive-include python/examples *.py
-recursive-include python/tests *.py
-recursive-include Matlab *.m *.c *.mex* *.dll *.so *.dylib *.h
-recursive-include c_src *.c *.h
-recursive-include docs *.pdf
-recursive-include sample_data *.md
+include PYPI.md
+include pyproject.toml
+include pytest.ini
+graft python/src
+graft python/examples
+graft python/tests
+include python/README.md
+include python/API.md
+prune Matlab
+prune c_src
+prune docs
+prune release
+prune sample_data
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store

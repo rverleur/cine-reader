@@ -15,10 +15,16 @@ This repository contains:
 
 ## Python Installation
 
-There is currently no PyPI package. Install from a GitHub release, from the
-Git repo, or from a local checkout.
+Preferred once the package is published on PyPI:
 
-### Recommended: install from a GitHub release
+```bash
+pip install cine-reader
+```
+
+You can also install from a GitHub release, from the Git repo, or from a
+local checkout.
+
+### Install from a GitHub release
 
 1. Open the Releases page for the repo.
 2. Download the wheel for the release you want:

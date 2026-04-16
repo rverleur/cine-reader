@@ -8,8 +8,14 @@ Repository:
 
 ## Installation
 
-There is currently no PyPI package. Install from a GitHub release, from Git,
-or from a local checkout.
+Preferred once the package is published on PyPI:
+
+```bash
+pip install cine-reader
+```
+
+You can also install from a GitHub release, from Git, or from a local
+checkout.
 
 ### Install from a GitHub release
 

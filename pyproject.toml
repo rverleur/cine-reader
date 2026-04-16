@@ -6,17 +6,16 @@ build-backend = "setuptools.build_meta"
 name = "cine-reader"
 version = "0.1.0"
 description = "Cross-platform Python reader for Vision Research Phantom .cine files"
-readme = "README.md"
+readme = { file = "PYPI.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
 authors = [
   { name = "Rees Verleur" }
 ]
-license = { text = "MIT" }
+license = "MIT"
 keywords = ["phantom", "cine", "high-speed-camera", "imaging"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: MacOS",
   "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX :: Linux",
@@ -28,9 +27,19 @@ dependencies = [
   "numpy>=1.24",
 ]
 
+[project.urls]
+Homepage = "https://github.com/rverleur/cine-reader"
+Repository = "https://github.com/rverleur/cine-reader"
+Documentation = "https://github.com/rverleur/cine-reader/blob/main/python/API.md"
+Issues = "https://github.com/rverleur/cine-reader/issues"
+Releases = "https://github.com/rverleur/cine-reader/releases"
+"MATLAB Implementation" = "https://github.com/rverleur/cine-reader/tree/main/Matlab"
+
 [project.optional-dependencies]
 dev = [
+  "build>=1.2",
   "pytest>=8.0",
+  "twine>=5.0",
 ]
 
 [tool.setuptools]
