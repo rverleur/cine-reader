@@ -1,8 +1,9 @@
-"""Frame payload decoding helpers for Phantom CINE data."""
-
+"""Compatibility wrapper around Rust's standalone frame decoder."""
 from __future__ import annotations
 
 import numpy as np
+
+from ._native import check, library
 
 
 def decode_frame_payload(
@@ -13,79 +14,31 @@ def decode_frame_payload(
     height_signed: int,
     real_bpp: int,
     unpack_10bit_fn,
+    compression: int | None = None,
 ) -> np.ndarray:
-    """Decode one frame payload to a NumPy array.
+    """Decode a payload in legacy storage-row/BGR order.
 
-    Parameters
-    ----------
-    raw:
-        Raw frame payload bytes (annotation block excluded).
-    bit_count:
-        Container bit depth from bitmap header (`biBitCount`).
-    width:
-        Image width.
-    height_signed:
-        Signed image height from bitmap header. Negative means top-down storage.
-    real_bpp:
-        Sensor bit depth from setup block (`RealBPP`).
-    unpack_10bit_fn:
-        Callable that decodes Phantom packed 10-bit blocks to `uint16`.
-
-    Returns
-    -------
-    numpy.ndarray
-        Decoded frame payload. Raw CFA color frames remain 2D sensor mosaics;
-        debayering is handled by `Cine`.
+    Supply bitmap ``compression`` when available (0 normal, 256 packed10,
+    1024 packed12). Older callers omit it; packed10 is then recognized from
+    its payload length as well as RealBPP, so normal 10-bit-in-16-bit data is
+    decoded correctly. The historical packed decoder callback is preserved.
     """
-    height = abs(int(height_signed))
+    if bit_count not in (8, 16, 24, 48) or width <= 0 or height_signed == 0:
+        raise ValueError("Unsupported bit depth or image dimensions")
     channels = 1 if bit_count in (8, 16) else 3
-
-    if bit_count in (8, 24):
-        row_bytes = width * channels
-        row_stride = ((row_bytes + 3) // 4) * 4
-        buffer_u8 = np.frombuffer(raw, dtype=np.uint8)
-        if buffer_u8.size == height * row_stride:
-            rows = buffer_u8.reshape(height, row_stride)[:, :row_bytes]
-        elif buffer_u8.size == height * row_bytes:
-            rows = buffer_u8.reshape(height, row_bytes)
-        else:
-            raise ValueError(
-                f"8/24-bit size mismatch: got {buffer_u8.size}, expected "
-                f"{height * row_bytes} or {height * row_stride}"
-            )
-        if channels == 1:
-            return rows.reshape(height, width).copy()
-        return rows.reshape(height, width, channels).copy()
-
-    if bit_count not in (16, 48):
-        raise ValueError(f"Unsupported bit depth: {bit_count}")
-
-    if int(real_bpp) == 10:
-        unpacked = unpack_10bit_fn(raw)
-        expected = height * width * channels
-        if unpacked.size < expected:
-            raise ValueError(
-                f"Packed 10-bit decode returned {unpacked.size} samples, expected at least {expected}"
-            )
-        unpacked = unpacked[:expected]
-        if channels == 1:
-            return unpacked.reshape(height, width)
-        return unpacked.reshape(height, width, channels)
-
-    row_bytes = width * channels * 2
-    row_stride = ((row_bytes + 3) // 4) * 4
-    buffer_u8 = np.frombuffer(raw, dtype=np.uint8)
-    if buffer_u8.size == height * row_stride:
-        rows_u8 = buffer_u8.reshape(height, row_stride)[:, :row_bytes]
-    elif buffer_u8.size == height * row_bytes:
-        rows_u8 = buffer_u8.reshape(height, row_bytes)
-    else:
-        raise ValueError(
-            f"16/48-bit size mismatch: got {buffer_u8.size}, expected "
-            f"{height * row_bytes} or {height * row_stride}"
-        )
-    rows_u8 = np.ascontiguousarray(rows_u8)
-    values = rows_u8.view("<u2")
-    if channels == 1:
-        return values.reshape(height, width)
-    return values.reshape(height, width, channels)
+    height = abs(int(height_signed))
+    samples = height * int(width) * channels
+    if compression is None:
+        compression = 256 if real_bpp == 10 and len(raw) == ((samples + 3) // 4) * 5 else 0
+    shape = (height, int(width)) + (() if channels == 1 else (3,))
+    if compression == 256 and unpack_10bit_fn is not None:
+        output = unpack_10bit_fn(raw)
+        if output.size < samples:
+            raise ValueError("Packed 10-bit decode returned too few samples")
+        return output[:samples].reshape(shape)
+    output = np.empty(shape, dtype=np.uint8 if bit_count in (8, 24) else "<u2")
+    payload = np.frombuffer(raw, dtype=np.uint8)
+    lib = library()
+    check(lib.cine_decode(payload.ctypes.data, payload.nbytes, width, height_signed,
+                          bit_count, compression, 0, output.ctypes.data, output.nbytes), lib)
+    return output

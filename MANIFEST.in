@@ -17,3 +17,17 @@ prune sample_data
 global-exclude __pycache__
 global-exclude *.py[cod]
 global-exclude .DS_Store
+
+include setup.py
+graft rust/cine-core/src
+graft rust/cine-core/include
+graft rust/cine-core/tests
+include rust/cine-core/Cargo.toml
+include Cargo.toml
+include Cargo.lock
+graft scripts
+include docs/BUILDING.md
+
+# Source archives contain source only; wheels build their own matching library.
+recursive-exclude python/src/cine_reader/libs *
+global-exclude *.py[cod]

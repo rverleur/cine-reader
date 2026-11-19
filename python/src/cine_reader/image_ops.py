@@ -1,15 +1,9 @@
-"""Image-space operations for CINE frame arrays."""
-
+"""Thin NumPy adapters for Rust image processing."""
 from __future__ import annotations
 
 import numpy as np
 
-
-_NEIGHBOR_OFFSETS = (
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),           (0, 1),
-    (1, -1),  (1, 0),  (1, 1),
-)
+from ._native import check, library
 
 _BAYER_PHASE_ROLES = {
     "RGGB": ((0, 0, "R"), (0, 1, "G_R"), (1, 0, "G_B"), (1, 1, "B")),
@@ -20,266 +14,72 @@ _BAYER_PHASE_ROLES = {
 
 
 def _bayer_phase_roles(pattern: str) -> tuple[tuple[int, int, str], ...]:
-    token = pattern.upper()
     try:
-        return _BAYER_PHASE_ROLES[token]
+        return _BAYER_PHASE_ROLES[pattern.upper()]
     except KeyError as exc:
         raise ValueError(f"Unsupported Bayer pattern: {pattern}") from exc
 
 
-def _dead_mask(frame: np.ndarray, dead_value: int, *, dead_is_threshold: bool) -> np.ndarray:
-    if dead_is_threshold:
-        return frame >= dead_value
-    return frame == dead_value
+def _process(frame, op: int, param: int = 0, value: float = 0):
+    original = np.asarray(frame)
+    types = {np.dtype("uint8"): 1, np.dtype("uint16"): 2,
+             np.dtype("float32"): 4, np.dtype("float64"): 8}
+    dtype = original.dtype.newbyteorder("=")
+    if dtype not in types:
+        if dtype.kind not in "biuf":
+            raise TypeError("Image data must be numeric")
+        dtype = np.dtype("float64")
+    source = np.ascontiguousarray(original, dtype=dtype)
+    shape = source.shape + (3,) if op == 3 else source.shape
+    result = np.empty(shape, dtype=dtype)
+    if source.size:
+        lib = library()
+        check(lib.cine_process(source.ctypes.data, result.ctypes.data,
+                               source.shape[1], source.shape[0],
+                               source.shape[2] if source.ndim == 3 else 1,
+                               types[dtype], op, param, value), lib)
+    return result.astype(original.dtype, copy=False)
 
 
-def _repair_sparse_dead_pixels(frame: np.ndarray, dead_mask: np.ndarray, out: np.ndarray) -> None:
-    """Repair sparse dead pixels into `out` from valid 8-neighbor values."""
-    y_bad, x_bad = np.nonzero(dead_mask)
-    if y_bad.size == 0:
-        return
-
-    height, width = frame.shape
-    sums = np.zeros(y_bad.size, dtype=np.float32)
-    counts = np.zeros(y_bad.size, dtype=np.uint8)
-
-    for row_offset, col_offset in _NEIGHBOR_OFFSETS:
-        y_nbr = y_bad + row_offset
-        x_nbr = x_bad + col_offset
-        in_bounds = (y_nbr >= 0) & (y_nbr < height) & (x_nbr >= 0) & (x_nbr < width)
-        if not np.any(in_bounds):
-            continue
-
-        idx = np.nonzero(in_bounds)[0]
-        y_valid = y_nbr[idx]
-        x_valid = x_nbr[idx]
-        valid = ~dead_mask[y_valid, x_valid]
-        if not np.any(valid):
-            continue
-
-        valid_idx = idx[valid]
-        sums[valid_idx] += frame[y_valid[valid], x_valid[valid]]
-        counts[valid_idx] += 1
-
-    replace = counts > 0
-    if np.any(replace):
-        out[y_bad[replace], x_bad[replace]] = (sums[replace] / counts[replace]).astype(frame.dtype, copy=False)
-
-
-def _replace_dead_pixels_dense_mask(frame: np.ndarray, dead_mask: np.ndarray) -> np.ndarray:
-    """Dense vectorized repair path for images with many dead pixels."""
+def replace_dead_pixels_mono(frame: np.ndarray, dead_value: int = 4095,
+                             *, dead_is_threshold: bool = False) -> np.ndarray:
+    """Replace dead mono samples with the valid 8-neighbor mean in Rust."""
     if frame.ndim != 2:
         return frame
-
-    frame_f = frame.astype(np.float32, copy=False)
-    valid = ~dead_mask
-    values = np.where(valid, frame_f, 0.0)
-    valid_i = valid.astype(np.int16)
-
-    pv = np.pad(values, ((1, 1), (1, 1)), mode="constant", constant_values=0.0)
-    pm = np.pad(valid_i, ((1, 1), (1, 1)), mode="constant", constant_values=0)
-
-    nbr_sum = (
-        pv[:-2, :-2] + pv[:-2, 1:-1] + pv[:-2, 2:] +
-        pv[1:-1, :-2] +                 pv[1:-1, 2:] +
-        pv[2:, :-2] + pv[2:, 1:-1] + pv[2:, 2:]
-    )
-    nbr_cnt = (
-        pm[:-2, :-2] + pm[:-2, 1:-1] + pm[:-2, 2:] +
-        pm[1:-1, :-2] +                 pm[1:-1, 2:] +
-        pm[2:, :-2] + pm[2:, 1:-1] + pm[2:, 2:]
-    )
-
-    out = frame_f.copy()
-    replace_mask = dead_mask & (nbr_cnt > 0)
-    out[replace_mask] = nbr_sum[replace_mask] / nbr_cnt[replace_mask]
-    return out.astype(frame.dtype, copy=False)
+    return _process(frame, 1, int(dead_is_threshold), float(dead_value))
 
 
-def _replace_dead_pixels_mono_mask(frame: np.ndarray, dead_mask: np.ndarray) -> np.ndarray:
-    """Replace dead pixels in a 2D image from a precomputed dead-pixel mask."""
+def replace_dead_pixels_bayer(frame: np.ndarray, dead_value: int = 4095,
+                              *, dead_is_threshold: bool = False) -> np.ndarray:
+    """Repair each Bayer phase using neighbors of the same color phase."""
     if frame.ndim != 2:
         return frame
-    if dead_mask.shape != frame.shape:
-        raise ValueError("dead_mask must have the same shape as frame")
-
-    dead_count = int(np.count_nonzero(dead_mask))
-    if dead_count == 0:
-        return frame
-
-    if dead_count <= max(64, frame.size // 25):
-        out = frame.copy()
-        _repair_sparse_dead_pixels(frame, dead_mask, out)
-        return out
-
-    return _replace_dead_pixels_dense_mask(frame, dead_mask)
+    return _process(frame, 2, int(dead_is_threshold), float(dead_value))
 
 
-def replace_dead_pixels_mono(
-    frame: np.ndarray,
-    dead_value: int = 4095,
-    *,
-    dead_is_threshold: bool = False,
-) -> np.ndarray:
-    """Replace dead pixels in a mono frame using valid 8-neighbor mean.
-
-    Parameters
-    ----------
-    frame:
-        2D mono image.
-    dead_value:
-        Dead-pixel marker value or threshold.
-    dead_is_threshold:
-        If `False`, dead pixels are `frame == dead_value`.
-        If `True`, dead pixels are `frame >= dead_value`.
-    """
-    if frame.ndim != 2:
-        return frame
-    mask = _dead_mask(frame, dead_value, dead_is_threshold=dead_is_threshold)
-    return _replace_dead_pixels_mono_mask(frame, mask)
-
-
-def replace_dead_pixels_bayer(
-    frame: np.ndarray,
-    dead_value: int = 4095,
-    *,
-    dead_is_threshold: bool = False,
-) -> np.ndarray:
-    """Repair dead pixels in raw Bayer/CFA frame by processing each 2x2 phase separately.
-
-    This follows the CINE guidance for raw color cines: bad pixels are not repaired in
-    camera output and should be repaired in software before demosaic. Splitting by 2x2
-    phase preserves color consistency of the CFA mosaic.
-    """
-    if frame.ndim != 2:
-        return frame
-
-    dead_mask = _dead_mask(frame, dead_value, dead_is_threshold=dead_is_threshold)
-    dead_count = int(np.count_nonzero(dead_mask))
-    if dead_count == 0:
-        return frame
-
-    if dead_count <= max(64, frame.size // 25):
-        out = frame.copy()
-        for row_phase in (0, 1):
-            for col_phase in (0, 1):
-                _repair_sparse_dead_pixels(
-                    frame[row_phase::2, col_phase::2],
-                    dead_mask[row_phase::2, col_phase::2],
-                    out[row_phase::2, col_phase::2],
-                )
-        return out
-
-    out = frame.copy()
-    for row_phase in (0, 1):
-        for col_phase in (0, 1):
-            sub = frame[row_phase::2, col_phase::2]
-            mask = dead_mask[row_phase::2, col_phase::2]
-            out[row_phase::2, col_phase::2] = _replace_dead_pixels_mono_mask(sub, mask)
-    return out
-
-
-def replace_dead_pixels_rgb(
-    frame: np.ndarray,
-    dead_value: int = 4095,
-    *,
-    dead_is_threshold: bool = False,
-) -> np.ndarray:
-    """Repair dead pixels per channel in RGB/BGR image data."""
+def replace_dead_pixels_rgb(frame: np.ndarray, dead_value: int = 4095,
+                            *, dead_is_threshold: bool = False) -> np.ndarray:
+    """Repair RGB/BGR samples independently within each channel."""
     if frame.ndim != 3:
         return frame
     if frame.shape[-1] <= 1:
         return frame.reshape(frame.shape[:2])
-
-    out = frame.copy()
-    for ch in range(frame.shape[-1]):
-        channel = frame[..., ch]
-        mask = _dead_mask(channel, dead_value, dead_is_threshold=dead_is_threshold)
-        out[..., ch] = _replace_dead_pixels_mono_mask(channel, mask)
-    return out
+    return _process(frame, 1, int(dead_is_threshold), float(dead_value))
 
 
-def replace_dead_pixels(
-    frame: np.ndarray,
-    *,
-    dead_value: int = 4095,
-    dead_is_threshold: bool = False,
-    bayer_raw: bool = False,
-) -> np.ndarray:
-    """Dispatch dead-pixel repair for mono, Bayer raw, and RGB data.
-
-    Parameters
-    ----------
-    frame:
-        Input image array (2D mono/Bayer or 3D RGB/BGR).
-    dead_value:
-        Dead-pixel marker value or threshold.
-    dead_is_threshold:
-        If `True`, treat values `>= dead_value` as dead.
-    bayer_raw:
-        If `True` and `frame` is 2D, process as CFA mosaic by 2x2 phase.
-    """
-    if frame.ndim == 3:
-        return replace_dead_pixels_rgb(
-            frame,
-            dead_value=dead_value,
-            dead_is_threshold=dead_is_threshold,
-        )
-    if frame.ndim == 2 and bayer_raw:
-        return replace_dead_pixels_bayer(
-            frame,
-            dead_value=dead_value,
-            dead_is_threshold=dead_is_threshold,
-        )
-    return replace_dead_pixels_mono(
-        frame,
-        dead_value=dead_value,
-        dead_is_threshold=dead_is_threshold,
+def replace_dead_pixels(frame: np.ndarray, *, dead_value: int = 4095,
+                        dead_is_threshold: bool = False, bayer_raw: bool = False) -> np.ndarray:
+    """Dispatch repair for mono, Bayer, and multichannel image arrays."""
+    function = replace_dead_pixels_rgb if frame.ndim == 3 else (
+        replace_dead_pixels_bayer if frame.ndim == 2 and bayer_raw else replace_dead_pixels_mono
     )
+    return function(frame, dead_value, dead_is_threshold=dead_is_threshold)
 
 
 def demosaic_bilinear(frame: np.ndarray, pattern: str = "RGGB") -> np.ndarray:
-    """Fast bilinear Bayer demosaic for mono raw frames."""
-    input_dtype = frame.dtype
-    frame_f = frame.astype(np.float32, copy=False)
-    h, w = frame_f.shape
-
-    pad = np.pad(frame_f, ((1, 1), (1, 1)), mode="edge")
-    c = pad[1:-1, 1:-1]
-    up = pad[:-2, 1:-1]
-    dn = pad[2:, 1:-1]
-    lf = pad[1:-1, :-2]
-    rt = pad[1:-1, 2:]
-    ul = pad[:-2, :-2]
-    ur = pad[:-2, 2:]
-    dl = pad[2:, :-2]
-    dr = pad[2:, 2:]
-
-    g_cross = (up + dn + lf + rt) * 0.25
-    rb_diag = (ul + ur + dl + dr) * 0.25
-    lr = (lf + rt) * 0.5
-    ud = (up + dn) * 0.5
-
-    rgb = np.empty((h, w, 3), dtype=np.float32)
-    for row_phase, col_phase, role in _bayer_phase_roles(pattern):
-        rows = slice(row_phase, None, 2)
-        cols = slice(col_phase, None, 2)
-        if role == "R":
-            rgb[rows, cols, 0] = c[rows, cols]
-            rgb[rows, cols, 1] = g_cross[rows, cols]
-            rgb[rows, cols, 2] = rb_diag[rows, cols]
-        elif role == "B":
-            rgb[rows, cols, 0] = rb_diag[rows, cols]
-            rgb[rows, cols, 1] = g_cross[rows, cols]
-            rgb[rows, cols, 2] = c[rows, cols]
-        elif role == "G_R":
-            rgb[rows, cols, 0] = lr[rows, cols]
-            rgb[rows, cols, 1] = c[rows, cols]
-            rgb[rows, cols, 2] = ud[rows, cols]
-        else:
-            rgb[rows, cols, 0] = ud[rows, cols]
-            rgb[rows, cols, 1] = c[rows, cols]
-            rgb[rows, cols, 2] = lr[rows, cols]
-
-    np.rint(rgb, out=rgb)
-    return rgb.astype(input_dtype, copy=False)
+    """Bilinear demosaic with clamped borders and the existing rounding rules."""
+    if frame.ndim != 2:
+        raise ValueError("Bayer input must be a two-dimensional array")
+    token = pattern.upper()
+    _bayer_phase_roles(token)
+    return _process(frame, 3, ("RGGB", "BGGR", "GRBG", "GBRG").index(token))

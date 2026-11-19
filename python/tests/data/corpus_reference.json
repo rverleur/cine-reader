@@ -1,0 +1,240 @@
+[
+  {
+    "name": "45Degree 2.cine",
+    "bytes": 157704844,
+    "frames": 401,
+    "shape": [
+      384,
+      512
+    ],
+    "real_bpp": 12,
+    "compression": 0,
+    "cfa": 0,
+    "hashes": {
+      "0": "a04f5cd342a1f5af4a3c84a461ca11228de4a3fd65c920809dd94669cce8f650",
+      "200": "401ac80007e0b93a272e4fe1fa139550f983eb5617b40f49972a465cb154932b",
+      "400": "44f66b63fa459d4ffeac2e650a4ecda9090a78ebc4ca387b2c8bc478460b2a10"
+    }
+  },
+  {
+    "name": "45Degree 3.cine",
+    "bytes": 157704844,
+    "frames": 401,
+    "shape": [
+      384,
+      512
+    ],
+    "real_bpp": 12,
+    "compression": 0,
+    "cfa": 0,
+    "hashes": {
+      "0": "ecef49ffbba1f5108b5312a12b2dc729d39ee82620d9594d9d84dc5968f21f5e",
+      "200": "36379439ffc43b9d5bd732a37556788e8819b2772921b4be849a70939ab7f762",
+      "400": "99f99875b809cdca78ae0fdb0b9b2317eb2e1bc46cf60431a722b49e93707644"
+    }
+  },
+  {
+    "name": "45Degree.cine",
+    "bytes": 157704844,
+    "frames": 401,
+    "shape": [
+      384,
+      512
+    ],
+    "real_bpp": 12,
+    "compression": 0,
+    "cfa": 0,
+    "hashes": {
+      "0": "4efcd54024ffe2fcbeb3cb94672c734b3b9805487b9bbcb611e8bd09aaf491ac",
+      "200": "96e6f6ae711fe826ccbb3615ce05e8536cf79f05d2eb10dff98b9e463429faaa",
+      "400": "87d9cb0ac55427cf54a1f0b91ddc73eb9e319b9b47c4eb4a4b8337c327c4571b"
+    }
+  },
+  {
+    "name": "Color23CT.cine",
+    "bytes": 6144985228,
+    "frames": 10001,
+    "shape": [
+      384,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 3,
+    "hashes": {
+      "0": "8c3f8b92b136031fce41822aea658698a61f16f2e6bae7865cc77366cf081036",
+      "5000": "4e1cb8a68e147ae4d25e681bf9d388b69c06580fdb6256f07ac714f85a45cbf4",
+      "10000": "3e44fad7b31b4cd7ab1dee535e698f4293d6cbbcb4166538ef16354a059f48b3"
+    }
+  },
+  {
+    "name": "FeNe_knife.cine",
+    "bytes": 129294432,
+    "frames": 101,
+    "shape": [
+      800,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 0,
+    "hashes": {
+      "0": "a2d12c6ad8a2ec140957aea36268e6a1f57c158532a928f0f6e5527210b7ec9b",
+      "50": "9e6743b0ec53a698164b9cb3944897a078f476e772ac216db921dc0897accf4b",
+      "100": "c8d37225c0ee895481272874fe71881eaaa6b2ccb10a6c4c7afc345f885d6693"
+    }
+  },
+  {
+    "name": "FeNe_last_knife_bestfocus.cine",
+    "bytes": 456983648,
+    "frames": 357,
+    "shape": [
+      800,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 0,
+    "hashes": {
+      "0": "b0cb48176b10406345d2f0a848cbc06081c4aff6e2e3dba89b8fce5950481fb6",
+      "178": "926cbdf51065fae09c556b7f66706c09ea1fe7b9461545ac329c625d34ad1e65",
+      "356": "85de01893290307289af5810990224f03f4913ecea100eb42c2c936ee6746576"
+    }
+  },
+  {
+    "name": "H50 15.cine",
+    "bytes": 3841398832,
+    "frames": 3001,
+    "shape": [
+      800,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 0,
+    "hashes": {
+      "0": "b5993aa6259cfaa9514daae3bac474807846e8a20386b846965473c5787df366",
+      "1500": "37946839b68772fd0805afaba5e5d1c5f9bac87845bf99e6f38bffe6f474b0df",
+      "3000": "e1ceede33a8b711dffe155a827bb733d560d162ab85bac0421edd4d875ba20aa"
+    }
+  },
+  {
+    "name": "HOLO_spatial.cine",
+    "bytes": 5476004804,
+    "frames": 4278,
+    "shape": [
+      800,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 0,
+    "hashes": {
+      "0": "9f8d0cece96582cfc103eabff96d7a1dd51b26ea30e3d9cc72f128f6a238afb0",
+      "2139": "b520b763acc3f2bd5f9c0f62c0d1991b77a72ca97eedecae7dab2b4130e74604",
+      "4277": "fe2e7e42a96c6d71234257d5ecc801c675b106eff1899f061f401d270a3a77dc"
+    }
+  },
+  {
+    "name": "IPA Laser 5mm 50 ms.cine",
+    "bytes": 6401470832,
+    "frames": 5001,
+    "shape": [
+      800,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 0,
+    "hashes": {
+      "0": "6c5ef001bbddc5b2d95017631a1cfa832025e4c9edc0b504a741bc7de19916a9",
+      "2500": "015dcc146f30dbd267854af08bca188b1e61f4099a66be55eb9daa6f73312ceb",
+      "5000": "bf45a7bc998c18edafd391e76b7d7cfa419bdd5514e85218a07d067e8e29c745"
+    }
+  },
+  {
+    "name": "particle1.cine",
+    "bytes": 449303432,
+    "frames": 351,
+    "shape": [
+      800,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 0,
+    "hashes": {
+      "0": "398390c3964cca2a88254584cb3f4f1b2a052a67ca50fc1412c62bbe87beeb22",
+      "175": "a42f483c8541e930594ea7282a4cb1cfde812945602019f8e346ba944f1fc374",
+      "350": "379bd184056b5cc7ac60a8dd48cbeb27142d214257a40ddf6bd993a64a757726"
+    }
+  },
+  {
+    "name": "particle1_HOLO.cine",
+    "bytes": 641308832,
+    "frames": 501,
+    "shape": [
+      800,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 0,
+    "hashes": {
+      "0": "8be9e0a3df31d736f725a8d26ef9599bfb8b34ed62aa83defb23927d2c3bb5f6",
+      "250": "a41be42128cf221cbc7a12b553810dad660c3e5b14be56f9da3280b065db5f17",
+      "500": "dd6ca5cee762a2728a52147ef32ab02797f7848acdffae4ac80d6c0a31af7d3c"
+    }
+  },
+  {
+    "name": "shot 2.cine",
+    "bytes": 2048600432,
+    "frames": 5001,
+    "shape": [
+      256,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 3,
+    "hashes": {
+      "0": "10671f850ccca33d99a200ba067a6859623eced4682f76f5bd7bae9a0d1884d8",
+      "2500": "02ab3145fe6df615cedf84f6fb0b86a617ee634f56d6d77276eaf89a63e951fc",
+      "5000": "49bbf08fecfcb3008918d84643f3a38afb66857b613a9b6f1f4634ebdd6500f9"
+    }
+  },
+  {
+    "name": "shot.cine",
+    "bytes": 2048600432,
+    "frames": 5001,
+    "shape": [
+      256,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 3,
+    "hashes": {
+      "0": "2c21c3a9c4e3a70c3755a0fa4bc17b800b58edb497e9af042354f67486f4978b",
+      "2500": "883d49da95f4c21a739926f82a158c5c778cf6ef5382d08f8ce59603a4f5b6ac",
+      "5000": "835f1d9f30ee061be5a555f1c53e63ef16c74855692728f9b61392882a7cada7"
+    }
+  },
+  {
+    "name": "visible_0_2500.cine",
+    "bytes": 1024510432,
+    "frames": 2501,
+    "shape": [
+      256,
+      1280
+    ],
+    "real_bpp": 10,
+    "compression": 256,
+    "cfa": 3,
+    "hashes": {
+      "0": "22033a210e56f7511da330b2c4418059ca3739ccc4b51c22022971d859204125",
+      "1250": "92074a1db8f33a1abea4ef26aa5c371c27ae58717c5bb0a358e73344f9265491",
+      "2500": "4f98d23e1abd0dd573cdf33c419580a4c44648d857c118123aa54db138184d11"
+    }
+  }
+]

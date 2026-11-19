@@ -70,3 +70,14 @@ def test_debayer_frame_mutates_current_raw_frame_to_rgb() -> None:
     assert cine.red_pixels is not None
     assert cine.red_pixels[0, 0] == 0
     assert np.isnan(cine.red_pixels[0, 1])
+
+
+def test_recording_timezone_uses_seconds_west_of_utc() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    timestamp = int(datetime(2020, 1, 1, 12, tzinfo=timezone.utc).timestamp()) << 32
+    west = Cine._decode_recording_datetime(timestamp, 14400)
+    east = Cine._decode_recording_datetime(timestamp, -19800)
+    assert west.hour == 8 and west.utcoffset() == timedelta(hours=-4)
+    assert east.hour == 17 and east.minute == 30
+    assert east.utcoffset() == timedelta(hours=5, minutes=30)

@@ -15,11 +15,11 @@ def _decode_text(raw: bytes) -> str:
 
 
 def _f32(data: bytes, start: int) -> float:
-    return struct.unpack("<f", data[start:start + 4])[0]
+    return struct.unpack("<f", data[start:start + 4].ljust(4, b"\0"))[0]
 
 
 def _f64(data: bytes, start: int) -> float:
-    return struct.unpack("<d", data[start:start + 8])[0]
+    return struct.unpack("<d", data[start:start + 8].ljust(8, b"\0"))[0]
 
 
 @dataclass
@@ -96,6 +96,15 @@ class ImageOffsets:
     pImageData: bytes  # Raw bytes of offsets table.
     pImage: np.ndarray  # `uint64` offsets array with N+1 entries.
 
+    def __getattribute__(self, name):
+        if name in {"pImage", "pImageData"}:
+            state = object.__getattribute__(self, "__dict__")
+            loader = state.get("_lazy_loader")
+            if loader is not None:
+                raw, offsets = loader()
+                state.update(pImageData=raw, pImage=offsets, _lazy_loader=None)
+        return object.__getattribute__(self, name)
+
     @property
     def image_offsets(self) -> np.ndarray:
         """Alias for `pImage`."""
@@ -116,7 +125,7 @@ class Setup:
     dFrameRate: float = 0.0  # Floating-point frame rate when available.
     Shutter: int = 0  # Legacy shutter/exposure token.
     ShutterNs: int = 0  # Exposure time in nanoseconds.
-    RecordingTimeZone: int = 0  # Time-zone offset token from setup block.
+    RecordingTimeZone: int = 0  # Seconds west of UTC (opposite the UTC offset sign).
     RealBPP: int = 0  # Sensor bit depth (e.g., 10/12/14).
     bEnableColor: bool = False  # Color enable flag.
     Description: str = ""  # User description text.
@@ -124,6 +133,15 @@ class Setup:
     CineName: str = ""  # Cine clip name.
     CreatedBy: str = ""  # Creator/user text.
     _extra: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def __getattribute__(self, name):
+        if name == "SetupData":
+            state = object.__getattribute__(self, "__dict__")
+            loader = state.get("_setup_data_loader")
+            if loader is not None:
+                state["SetupData"] = loader()
+                state["_setup_data_loader"] = None
+        return object.__getattribute__(self, name)
 
     def __post_init__(self) -> None:
         for key, value in self._extra.items():

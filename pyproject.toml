@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cine-handler"
 version = "0.1.1"
-description = "Cross-platform Python reader for Vision Research Phantom .cine files"
+description = "Streaming Rust-backed reader and writer for Vision Research Phantom .cine files"
 readme = { file = "PYPI.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
 authors = [
@@ -36,6 +36,7 @@ Releases = "https://github.com/rverleur/cine-reader/releases"
 "MATLAB Implementation" = "https://github.com/rverleur/cine-reader/tree/main/Matlab"
 
 [project.optional-dependencies]
+images = ["Pillow>=9"]
 dev = [
   "build>=1.2",
   "pytest>=8.0",

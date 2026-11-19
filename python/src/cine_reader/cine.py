@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import struct
+import io
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
 import numpy as np
 
+from ._native import NativeReader
 from .frame_decode import decode_frame_payload
 from .headers import (
     BitmapHeader,
@@ -17,7 +18,6 @@ from .headers import (
     Setup,
     read_bitmap_header,
     read_cine_header,
-    read_image_offsets,
     read_setup,
 )
 from .image_ops import demosaic_bilinear, replace_dead_pixels as repair_dead_pixels
@@ -45,6 +45,7 @@ class Cine:
         dead_value: int | None = None,
         dead_is_threshold: bool = True,
         bayer_pattern: str = "auto",
+        canonical: bool = False,
     ):
         """Create and open a CINE file reader.
 
@@ -69,6 +70,10 @@ class Cine:
             Bayer layout token for debayering. Use `"auto"` to infer from setup
             `CFA`.
         """
+        self._pending_frame = False
+        self._color_samples_pending = None
+        self._image_data_pending = False
+        self.canonical = bool(canonical)
         self.filename = str(filename)
         self.keep_annotations = bool(keep_annotations)
         self.remove_dead_pixels = bool(remove_dead_pixels)
@@ -110,7 +115,7 @@ class Cine:
 
     def __del__(self) -> None:
         try:
-            self.close_file()
+            self._release_reader()
         except Exception:
             pass
 
@@ -186,6 +191,7 @@ class Cine:
 
     @image.setter
     def image(self, value: np.ndarray) -> None:
+        self._pending_frame = False
         self.pixel_array = np.asarray(value)
         self.pixel_data = self.pixel_array.reshape(-1)
         self._pixel_array_channel_order = "RGB" if self.pixel_array.ndim == 3 else None
@@ -200,49 +206,105 @@ class Cine:
     def frame(self, value: np.ndarray) -> None:
         self.image = value
 
-    def open_cine_file(self, filename: str | Path) -> None:
-        """Open a CINE file and parse all top-level metadata blocks.
+    _FRAME_ATTRIBUTES = frozenset({
+        "pixel_array", "pixel_data", "red_pixels", "green_pixels", "blue_pixels",
+        "annotation_size", "annotation_data", "annotation", "image_size", "image_data",
+    })
 
-        Parameters
-        ----------
-        filename:
-            Path to the CINE file to open.
+    def __setattr__(self, name, value):
+        # Direct pixel_array assignment is part of the existing public surface.
+        # It must not be overwritten by a still-pending implicit initial load.
+        if name == "pixel_array" and self.__dict__.get("_pending_frame", False):
+            self.__dict__["_pending_frame"] = False
+        object.__setattr__(self, name, value)
+
+    def __getattribute__(self, name):
+        if name in Cine._FRAME_ATTRIBUTES:
+            state = object.__getattribute__(self, "__dict__")
+            if state.get("_pending_frame", False):
+                object.__getattribute__(self, "load_frame")(state["current_frame"])
+            if name in {"red_pixels", "green_pixels", "blue_pixels"}:
+                pending = state.get("_color_samples_pending")
+                if pending is not None:
+                    state["_color_samples_pending"] = None
+                    object.__getattribute__(self, "_update_color_sample_arrays")(pending)
+            if name == "image_data" and state.get("_image_data_pending", False):
+                state["image_data"] = object.__getattribute__(self, "_require_file_handle")().block(4)
+                state["_image_data_pending"] = False
+        return object.__getattribute__(self, name)
+
+    def open_cine_file(self, filename: str | Path) -> None:
+        """Open metadata immediately; decode the initial frame on first access.
+
+        Offset tables, tagged setup bytes and channel sample arrays are also
+        materialized only when their existing public attributes are accessed.
         """
+        self._release_reader()
         self.filename = str(filename)
-        self.close_file()
-        self.file_handle = open(self.filename, mode="rb")
+        reader = NativeReader(filename)
+        self.file_handle = reader
         try:
-            self.file_header = read_cine_header(self.file_handle)
-            self.image_header = read_bitmap_header(
-                self.file_handle,
-                off_image_header=int(self.file_header.OffImageHeader),
-            )
-            self.camera_setup = read_setup(
-                self.file_handle,
-                off_setup=int(self.file_header.OffSetup),
-                off_image_offsets=int(self.file_header.OffImageOffsets),
-            )
-            self.image_locations = read_image_offsets(
-                self.file_handle,
-                off_image_offsets=int(self.file_header.OffImageOffsets),
-                image_count=int(self.file_header.ImageCount),
-                version=int(self.file_header.Version),
-            )
+            self.file_header = read_cine_header(io.BytesIO(reader.block(0)))
+            self.image_header = read_bitmap_header(io.BytesIO(reader.block(1)), off_image_header=0)
+            setup = reader.block(2)
+            self.camera_setup = read_setup(io.BytesIO(setup), off_setup=0, off_image_offsets=len(setup))
+            self.camera_setup._setup_data_loader = lambda: reader.block(5)
+            self.image_locations = ImageOffsets(pImageData=b"", pImage=np.empty(0, dtype=np.uint64))
+            version = self.file_header.Version
+
+            def load_offsets():
+                raw = reader.block(6)
+                offsets = np.frombuffer(raw, dtype="<u8" if version == 1 else "<u4").astype(np.uint64, copy=False)
+                return raw, np.append(offsets, np.uint64(reader.info.file_size))
+
+            self.image_locations._lazy_loader = load_offsets
             self._recording_datetime = self._decode_recording_datetime(
                 trigger_time=int(self.file_header.TriggerTime),
-                recording_tz_minutes=int(self.camera_setup.RecordingTimeZone),
+                recording_tz_seconds=int(self.camera_setup.RecordingTimeZone),
             )
             self.current_frame = int(self.file_header.FirstImageNo)
-            self.load_frame(self.current_frame)
+            self._color_samples_pending = None
+            self._image_data_pending = False
+            self.pixel_array = self.pixel_data = None
+            self.red_pixels = self.green_pixels = self.blue_pixels = None
+            self.annotation_size = self.image_size = 0
+            self.annotation = self.annotation_data = self.image_data = b""
+            self._pending_frame = self.total_frames > 0
         except Exception:
-            self.close_file()
+            self._release_reader()
             raise
 
     def close_file(self) -> None:
-        """Close the active CINE file handle."""
-        if self.file_handle is not None and not self.file_handle.closed:
-            self.file_handle.close()
+        """Close while retaining the legacy public frame and metadata state.
+
+        Deferred data is materialized here so it remains accessible after close.
+        Object destruction and reopening release resources without doing this.
+        """
+        reader = getattr(self, "file_handle", None)
+        if reader is None or reader.closed:
+            return
+        try:
+            if self.__dict__.get("_pending_frame", False):
+                self.load_frame(self.current_frame)
+            if self.__dict__.get("_image_data_pending", False):
+                self.image_data = reader.block(4)
+            setup = getattr(self, "camera_setup", None)
+            if setup is not None:
+                _ = setup.SetupData
+            locations = getattr(self, "image_locations", None)
+            if locations is not None:
+                _ = locations.pImage
+        finally:
+            self._release_reader()
+
+    def _release_reader(self) -> None:
+        """Release native resources without reading deferred public state."""
+        reader = getattr(self, "file_handle", None)
+        if reader is not None and not reader.closed:
+            reader.close()
         self.file_handle = None
+        self._pending_frame = False
+        self._image_data_pending = False
 
     def next_frame(self, increment: int = 1, *, convert_bgr_to_rgb: bool = False) -> None:
         """Load the next frame relative to `current_frame`.
@@ -269,80 +331,31 @@ class Cine:
         convert_bgr_to_rgb:
             If `True`, convert 3-channel frame data from BGR to RGB.
         """
-        handle = self._require_file_handle()
-        header = self._require_file_header()
-        offsets = self._require_image_locations().pImage
-
-        first = int(header.FirstImageNo)
-        count = int(header.ImageCount)
-        index = int(image_no) - first
-        if index < 0 or index >= count:
-            raise IndexError("image_no is out of bounds")
-
+        reader = self._require_file_handle()
+        index = int(image_no) - self.first_frame_number
+        flags = (3 if self.canonical else 0)
+        if convert_bgr_to_rgb:
+            flags |= 2
+        frame, details, annotation = reader.load(index, flags=flags, annotations=self.keep_annotations)
+        self._pending_frame = False
         self.current_frame = int(image_no)
-        start = int(offsets[index])
-        stop = int(offsets[index + 1])
-
-        handle.seek(start, 0)
-        ann_size_raw = handle.read(4)
-        if len(ann_size_raw) != 4:
-            raise EOFError("Unexpected EOF while reading annotation size")
-        annotation_size = int.from_bytes(ann_size_raw, "little", signed=False)
-        self.annotation_size = annotation_size
-
-        if self.keep_annotations:
-            handle.seek(start, 0)
-            annotation_data = handle.read(annotation_size)
-            if len(annotation_data) != annotation_size:
-                raise EOFError("Unexpected EOF while reading annotation block")
-            self.annotation_data = annotation_data
-            if annotation_size >= 8:
-                self.annotation = annotation_data[4:annotation_size - 4]
-            else:
-                self.annotation = b""
-            image_size = int.from_bytes(annotation_data[-4:], "little", signed=False) if annotation_size >= 4 else 0
-            handle.seek(start + annotation_size, 0)
-        else:
-            self.annotation_data = b""
-            self.annotation = b""
-            image_size = 0
-            if annotation_size >= 4:
-                handle.seek(start + annotation_size - 4, 0)
-                tail_size = handle.read(4)
-                if len(tail_size) == 4:
-                    image_size = int.from_bytes(tail_size, "little", signed=False)
-            handle.seek(start + annotation_size, 0)
-
-        frame_size_from_offsets = max(0, stop - start - annotation_size)
-        if frame_size_from_offsets and (image_size == 0 or image_size > frame_size_from_offsets):
-            image_size = frame_size_from_offsets
-        self.image_size = image_size
-
-        image_data = handle.read(image_size)
-        if len(image_data) != image_size:
-            raise EOFError("Unexpected EOF while reading frame payload")
-        self.image_data = image_data
-
-        frame = self._decode_frame(image_data)
-
+        self.annotation_size = details.annotation_size
+        self.image_size = details.image_size
+        self.annotation_data = annotation
+        self.annotation = annotation[4:-4] if annotation else b""
+        self.image_data = b""
+        self._image_data_pending = True
         if self.remove_dead_pixels:
             frame = self._repair_dead_pixels_array(frame)
-
-        self._pixel_array_channel_order = None
-        self._update_color_sample_arrays(frame)
-
+        self._pixel_array_channel_order = "RGB" if frame.ndim == 3 and flags & 2 else self._decoded_channel_order(frame)
+        self._color_samples_from_raw_cfa = self._is_raw_bayer_frame(frame)
+        self.red_pixels = self.green_pixels = self.blue_pixels = None
+        self._color_samples_pending = frame
         if self.debayer and self._is_raw_bayer_frame(frame):
             frame = self._debayer_array(frame, bayer_pattern=self.bayer_pattern_mode)
-
-        self.pixel_array = frame
-        self._pixel_array_channel_order = self._decoded_channel_order(self.pixel_array)
-        self.pixel_data = self.pixel_array.reshape(-1)
-
-        if convert_bgr_to_rgb and self._pixel_array_channel_order == "BGR":
-            self.pixel_array = self.pixel_array[..., ::-1].copy()
             self._pixel_array_channel_order = "RGB"
-            self._update_color_sample_arrays(self.pixel_array)
-            self.pixel_data = self.pixel_array.reshape(-1)
+        self.pixel_array = frame
+        self.pixel_data = frame.reshape(-1)
 
     def replace_dead_pixels(
         self,
@@ -406,50 +419,9 @@ class Cine:
         end_frame:
             Last global frame number to include (inclusive).
         """
-        handle = self._require_file_handle()
-        header = self._require_file_header()
-        image_header = self._require_image_header()
-        setup = self._require_camera_setup()
-        offsets = self._require_image_locations().pImage
-
+        reader = self._require_file_handle()
         first, _ = self._validate_frame_range(start_frame, end_frame)
-        new_image_count = int(end_frame - start_frame + 1)
-        bytes_per_offset = 8 if int(header.Version) == 1 else 4
-
-        with open(output_filename, "wb") as output_file:
-            new_file_header = bytearray(header.FileHeaderData)
-            struct.pack_into("<I", new_file_header, 12, new_image_count)
-            struct.pack_into("<i", new_file_header, 16, int(start_frame))
-            struct.pack_into("<I", new_file_header, 20, new_image_count)
-            output_file.write(new_file_header)
-            output_file.write(image_header.ImageHeaderData)
-            output_file.write(setup.SetupData)
-
-            offsets_start = output_file.tell()
-            offset_position = offsets_start + new_image_count * bytes_per_offset
-            output_offsets = []
-
-            for frame_no in range(start_frame, end_frame + 1):
-                idx = frame_no - first
-                frame_start = int(offsets[idx])
-                frame_stop = int(offsets[idx + 1])
-                frame_size = frame_stop - frame_start
-                output_offsets.append(offset_position)
-                offset_position += frame_size
-
-            for offset in output_offsets:
-                if bytes_per_offset == 8:
-                    output_file.write(struct.pack("<Q", int(offset)))
-                else:
-                    output_file.write(struct.pack("<I", int(offset)))
-
-            for frame_no in range(start_frame, end_frame + 1):
-                idx = frame_no - first
-                frame_start = int(offsets[idx])
-                frame_stop = int(offsets[idx + 1])
-                frame_size = frame_stop - frame_start
-                handle.seek(frame_start, 0)
-                output_file.write(handle.read(frame_size))
+        reader.trim(output_filename, start_frame - first, end_frame - start_frame + 1)
 
     def average_frames(
         self,
@@ -630,6 +602,7 @@ class Cine:
             height_signed=int(image_header.biHeight),
             real_bpp=int(setup.RealBPP),
             unpack_10bit_fn=unpack_10bit_data,
+            compression=int(image_header.biCompression),
         )
 
     def _repair_dead_pixels_array(
@@ -653,6 +626,7 @@ class Cine:
         return demosaic_bilinear(frame, pattern=pattern)
 
     def _update_color_sample_arrays(self, frame: np.ndarray) -> None:
+        self._color_samples_pending = None
         self._color_samples_from_raw_cfa = False
 
         if self._is_raw_bayer_frame(frame):
@@ -781,6 +755,9 @@ class Cine:
         setup = self._require_camera_setup()
         white_level = int(getattr(setup, "WhiteLevel", -1))
         if white_level >= 0:
+            if int(self._require_image_header().biCompression) == 256 and white_level < 1024:
+                from ._lookup import LOOKUP_TABLE
+                white_level = int(LOOKUP_TABLE[white_level])
             return white_level + 1
 
         real_bpp = int(getattr(setup, "RealBPP", 0))
@@ -793,7 +770,7 @@ class Cine:
         return 4095
 
     @staticmethod
-    def _decode_recording_datetime(trigger_time: int, recording_tz_minutes: int) -> datetime | None:
+    def _decode_recording_datetime(trigger_time: int, recording_tz_seconds: int) -> datetime | None:
         """Decode CINE `TriggerTime` token to timezone-aware datetime when possible."""
         seconds = int(trigger_time >> 32)
         frac = int(trigger_time & 0xFFFFFFFF)
@@ -811,12 +788,12 @@ class Cine:
             micros -= 1_000_000
         dt_utc = dt_utc.replace(microsecond=micros)
 
-        if abs(int(recording_tz_minutes)) > 24 * 60:
+        if abs(int(recording_tz_seconds)) >= 24 * 60 * 60:
             return dt_utc
-        tzinfo = timezone(timedelta(minutes=int(recording_tz_minutes)))
+        tzinfo = timezone(timedelta(seconds=-int(recording_tz_seconds)))
         return dt_utc.astimezone(tzinfo)
 
-    def _require_file_handle(self) -> BinaryIO:
+    def _require_file_handle(self) -> NativeReader:
         if self.file_handle is None:
             raise RuntimeError("No CINE file is open.")
         return self.file_handle
