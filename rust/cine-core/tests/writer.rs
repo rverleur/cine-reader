@@ -47,7 +47,7 @@ fn encode(path: &Path, options: WriterOptions, frames: &[Vec<u8>]) {
 }
 
 #[test]
-fn normal_mono_has_bottom_up_rows_and_dword_padding() {
+fn normal_mono_has_bottom_up_tightly_packed_u16_rows() {
     let dir = Directory::new();
     let path = dir.path();
     let frame = vec![1, 2, 3, 4, 5, 6];
@@ -102,10 +102,7 @@ fn normal_rgb_stores_bgr_and_roundtrips_both_container_sizes() {
         if bits == 8 {
             assert_eq!(&bytes[offset..], &[6, 5, 4, 0, 3, 2, 1, 0]);
         } else {
-            assert_eq!(
-                &bytes[offset..],
-                &[6, 0, 5, 0, 4, 0, 0, 0, 3, 0, 2, 0, 1, 0, 0, 0]
-            );
+            assert_eq!(&bytes[offset..], &[6, 0, 5, 0, 4, 0, 3, 0, 2, 0, 1, 0]);
         }
         assert_eq!(Reader::open(&path).unwrap().read_frame(0).unwrap(), frame);
     }

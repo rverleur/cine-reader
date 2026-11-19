@@ -92,7 +92,14 @@ impl WriterOptions {
             .checked_mul(u64::from(self.height))
             .ok_or_else(|| Error::format("image dimensions overflow"))?;
         let samples = u64::from(self.width) * u64::from(self.height);
-        let row_stride = (row_bytes + 3) & !3;
+        // 8/24-bit Windows DIB rows are DWORD-aligned. Phantom's non-Windows
+        // 16/48-bit extensions are arrays of u16 samples, without row padding.
+        // Readers accept both conventions for historical third-party files.
+        let row_stride = if sample_bytes == 1 {
+            (row_bytes + 3) & !3
+        } else {
+            row_bytes
+        };
         let payload_bytes = if self.packed10 {
             if self.channels != 1 || self.bit_depth != 12 {
                 return Err(Error::format(

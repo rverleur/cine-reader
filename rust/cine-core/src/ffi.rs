@@ -413,3 +413,48 @@ pub unsafe extern "C" fn cine_stats_close(p: *mut c_void) {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rejects_partial_overlap_before_creating_slices() {
+        let mut bytes = [0u8; 16];
+        let source = bytes.as_ptr();
+        let target = unsafe { bytes.as_mut_ptr().add(1) };
+        assert_eq!(
+            unsafe { cine_decode(source, 8, 4, 2, 8, 0, 0, target, 8) },
+            -1
+        );
+        assert_eq!(bytes, [0; 16]);
+        assert_eq!(
+            unsafe { cine_process(source.cast(), target.cast(), 2, 2, 1, 1, 1, 0, 255.0) },
+            -1
+        );
+    }
+    #[test]
+    fn rejects_invalid_demosaic_shape_before_output_access() {
+        let source = [0u8; 3];
+        let mut target = [0u8; 3];
+        assert_eq!(
+            unsafe {
+                cine_process(
+                    source.as_ptr().cast(),
+                    target.as_mut_ptr().cast(),
+                    1,
+                    1,
+                    3,
+                    1,
+                    3,
+                    0,
+                    0.0,
+                )
+            },
+            -1
+        );
+        assert_eq!(
+            unsafe { cine_reader_info(ptr::null_mut(), ptr::null_mut()) },
+            -1
+        );
+    }
+}

@@ -117,6 +117,7 @@ fn invalid_payloads_and_small_buffers_are_errors() {
     assert!(decode(&[0; 5], 4, 1, 16, 256, 0, &mut [0; 2]).is_err());
     assert!(decode(&[0; 5], 0, 1, 16, 256, 0, &mut [0; 8]).is_err());
     assert!(decode(&[0; 5], 4, 1, 16, 999, 0, &mut [0; 8]).is_err());
+    assert!(decode(&[], u32::MAX, i32::MAX, 48, 0, 0, &mut []).is_err());
 }
 #[test]
 fn trimming_preserves_original_acquisition_numbers_and_slices_time_tags() {
