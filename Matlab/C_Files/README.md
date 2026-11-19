@@ -1,16 +1,3 @@
-# MATLAB Runtime Unpack Libraries
-
-This folder contains runtime shared libraries used by `Matlab/Cine.m` for
-packed 10-bit decode:
-
-- `unpack_data_win64.dll`
-- `unpack_data_win32.dll`
-- `unpack_data_arm64.dylib`
-- `unpack_data_elf64.so`
-
-These binaries are the MATLAB-side runtime copies of the shared unpack helpers.
-Canonical source files live in `c_src/`.
-
-If you use the Python package, matching runtime libraries are also bundled in:
-
-- `python/src/cine_reader/libs/`
+The former platform-specific C unpack libraries have been replaced by Rust.
+Run `build_cine_backend` from MATLAB. The runtime library is installed under
+`Matlab/private/lib/<computer('arch')>/` and shared by all CINE operations.

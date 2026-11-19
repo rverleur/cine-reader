@@ -1,55 +1,50 @@
-# MATLAB API Notes
+# MATLAB API
 
-## Construction and Lifecycle
-
-```matlab
-cine = Cine(fullfile('<repo>', 'sample_data', 'TrimmedCine.cine'), ...
-    'RemoveDeadPixels', false, 'Debayer', false);
-first = cine.FileHeader.FirstImageNo;
-cine.LoadFrame(first);
-img = cine.PixelArray;
-```
+The reader's existing call signatures remain available:
 
 - `Cine(filename, 'RemoveDeadPixels', false, 'Debayer', false, 'DeadValue', [], 'BayerPattern', 'auto')`
-  - `'RemoveDeadPixels'`: repair dead pixels on every `LoadFrame`.
-  - `'Debayer'`: debayer raw CFA/Bayer frames on every `LoadFrame`.
-- `OpenCineFile(filename)`
-- `LoadFrame(frame_no)`
-  - raw CFA/Bayer payloads stay 2D unless `'Debayer', true` or `DebayerFrame` is used.
-- `NextFrame(increment)`
-- `CloseFile()`
-- `RedPixels` / `GreenPixels` / `BluePixels`
-  - empty for mono frames.
-  - for raw CFA/Bayer color frames, `[H x W]` single arrays with actual sensor samples at that color's sites and `NaN` elsewhere.
-
-## Processing
-
-- `ReplaceDeadPixels(dead_value)`
-  - repairs mono frames directly
-  - repairs raw CFA/Bayer frames by 2x2 phase before demosaic
-  - repairs RGB frames channel-wise
-- `DebayerFrame(bayer_pattern)`
-  - mutates the current raw CFA/Bayer `PixelArray` into RGB `[H x W x 3]`.
-- `GetFrameRGB(frame_no, bayer_pattern)`
-
-## Statistics
-
+- `OpenCineFile(filename)`, `CloseFile()`, `LoadFrame(frame_no)`, `NextFrame(increment)`
+- `ReplaceDeadPixels(dead_value)`, `DebayerFrame(bayer_pattern)`, `GetFrameRGB(frame_no, bayer_pattern)`
 - `AverageFrames(start_frame, end_frame, replace, chunk_size)`
-  - Chunked accumulation for improved performance.
-- `ModeFrames(start_frame, end_frame, replace, 'name', value, ...)`
-  - `'method'`: `'auto' | 'mad' | 'topk'`
-  - `'q_bg'`: bright quantile baseline
-  - `'k_sigma'`: MAD scale (mad path)
-  - `'min_keep'`, `'max_keep'`, `'stack_limit'`
-
-## Batch and Trim
-
+- `ModeFrames(start_frame, end_frame, replace, 'method', 'auto', 'q_bg', .8, 'k_sigma', 2.5, 'min_keep', 3, 'max_keep', 96, 'stack_limit', 128)`
 - `LoadFramesBatch(start_frame, count)`
 - `SaveFramesToNewFile(output_filename, start_frame, end_frame)`
 
-## Private Helper Files
+Frame ranges are inclusive and use the file's global frame numbers, which may
+be negative. `LoadFramesBatch` explicitly allocates the requested batch;
+ordinary reads retain only the current frame. `chunk_size` is validated and
+retained for compatibility; the Rust mean accumulator streams frames directly.
 
-`Matlab/private/` contains split helpers used by `Cine.m`:
-- `cine_replace_dead_pixels.m`
-- `cine_demosaic_bilinear.m`
-- `cine_mode_mad_stack.m`
+`FileHeader`, `ImageHeader`, `CameraSetup`, `CurrentFrame`, `PixelArray`,
+`RawPixelArray`, `ImageLocations`, `AnnotationSize`, `AnnotationData`,
+`Annotation`, `ImageSize`, `RedPixels`, `GreenPixels` and `BluePixels` retain
+their public names. Initial image state and the offsets vector are lazy.
+`CameraSetup` materializes its legacy `SetupData` bytes, including tagged blocks,
+on first access. Internal frame reading uses the cached fixed setup metadata.
+Rust preserves/subsets tagged blocks as appropriate when trimming.
+Explicit `CloseFile` materializes deferred initial image and metadata state so
+these public properties remain available after closing. Deleting or reopening
+an object releases the discarded state without materializing it.
+
+`CineWriter(filename, width, height, name, value, ...)` accepts:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `Channels` | 1 | 1 mono/Bayer or 3 RGB |
+| `BitDepth` | 8 | uint8 at 8, uint16 at 9–16 |
+| `Packed10` | false | Phantom packed10 gamma encoding, linear12 input |
+| `FrameCount` | 0 | Known count; 0 means unknown-length stream |
+| `FirstFrame` | 0 | First global frame number |
+| `CFA` | 0 | Raw Bayer CFA identifier; 0 for mono/RGB |
+| `FrameRate` | 30 | Positive frames per second |
+
+With `Packed10=true`, the output depth is 12. uint8 input is scaled to linear12;
+RGB input is sampled into the chosen Bayer CFA (RGGB by default). This is lossy.
+`WriteFrame(frame)` appends one frame, `Close()` finalizes and publishes,
+`Abort()` discards unfinished output. `FramesWritten` counts successful writes.
+The destructor aborts unfinished output; explicitly close successful writes.
+
+`write_cine(filename, frames, name, value, ...)` accepts a cell array of arrays
+or image paths, a string array of image paths, or a MATLAB `VideoReader`.
+Options are forwarded to `CineWriter`; dimensions/channels/type are inferred
+from the first frame and VideoReader's frame rate is used by default.
