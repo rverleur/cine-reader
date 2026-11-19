@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from cine_reader.stats import average_from_frame_iter, robust_background_mad_stack, robust_background_topk
+from cine_reader.stats import (
+    average_from_frame_iter,
+    robust_background_mad_stack,
+    robust_background_topk,
+)
 
 
 def test_average_from_frame_iter_matches_expected() -> None:
@@ -22,8 +26,12 @@ def test_robust_background_methods_reject_dark_outlier() -> None:
         np.full((3, 3), 20, dtype=np.uint16),
     ]
 
-    mad = robust_background_mad_stack(iter(frames), q_bg=0.8, k_sigma=2.5, min_keep=2, out_dtype=np.uint16)
-    topk = robust_background_topk(iter(frames), frame_count=len(frames), q_bg=0.8, min_keep=1, max_keep=2, out_dtype=np.uint16)
+    mad = robust_background_mad_stack(
+        iter(frames), q_bg=0.8, k_sigma=2.5, min_keep=2, out_dtype=np.uint16
+    )
+    topk = robust_background_topk(
+        iter(frames), frame_count=len(frames), q_bg=0.8, min_keep=1, max_keep=2, out_dtype=np.uint16
+    )
 
     assert np.all(mad >= 95)
     assert np.all(topk >= 95)
@@ -36,8 +44,12 @@ def test_robust_background_methods_support_color_frames() -> None:
         np.full((2, 2, 3), 20, dtype=np.uint16),
     ]
 
-    mad = robust_background_mad_stack(iter(frames), q_bg=0.8, k_sigma=2.5, min_keep=2, out_dtype=np.uint16)
-    topk = robust_background_topk(iter(frames), frame_count=len(frames), q_bg=0.8, min_keep=1, max_keep=2, out_dtype=np.uint16)
+    mad = robust_background_mad_stack(
+        iter(frames), q_bg=0.8, k_sigma=2.5, min_keep=2, out_dtype=np.uint16
+    )
+    topk = robust_background_topk(
+        iter(frames), frame_count=len(frames), q_bg=0.8, min_keep=1, max_keep=2, out_dtype=np.uint16
+    )
 
     assert mad.shape == frames[0].shape
     assert topk.shape == frames[0].shape

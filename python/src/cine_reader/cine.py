@@ -20,7 +20,8 @@ from .headers import (
     read_cine_header,
     read_setup,
 )
-from .image_ops import demosaic_bilinear, replace_dead_pixels as repair_dead_pixels
+from .image_ops import demosaic_bilinear
+from .image_ops import replace_dead_pixels as repair_dead_pixels
 from .stats import average_from_frame_iter, robust_background_mad_stack, robust_background_topk
 from .unpack import unpack_10bit_data
 
@@ -206,10 +207,20 @@ class Cine:
     def frame(self, value: np.ndarray) -> None:
         self.image = value
 
-    _FRAME_ATTRIBUTES = frozenset({
-        "pixel_array", "pixel_data", "red_pixels", "green_pixels", "blue_pixels",
-        "annotation_size", "annotation_data", "annotation", "image_size", "image_data",
-    })
+    _FRAME_ATTRIBUTES = frozenset(
+        {
+            "pixel_array",
+            "pixel_data",
+            "red_pixels",
+            "green_pixels",
+            "blue_pixels",
+            "annotation_size",
+            "annotation_data",
+            "annotation",
+            "image_size",
+            "image_data",
+        }
+    )
 
     def __setattr__(self, name, value):
         # Direct pixel_array assignment is part of the existing public surface.
@@ -229,7 +240,9 @@ class Cine:
                     state["_color_samples_pending"] = None
                     object.__getattribute__(self, "_update_color_sample_arrays")(pending)
             if name == "image_data" and state.get("_image_data_pending", False):
-                state["image_data"] = object.__getattribute__(self, "_require_file_handle")().block(4)
+                state["image_data"] = object.__getattribute__(self, "_require_file_handle")().block(
+                    4
+                )
                 state["_image_data_pending"] = False
         return object.__getattribute__(self, name)
 
@@ -247,14 +260,18 @@ class Cine:
             self.file_header = read_cine_header(io.BytesIO(reader.block(0)))
             self.image_header = read_bitmap_header(io.BytesIO(reader.block(1)), off_image_header=0)
             setup = reader.block(2)
-            self.camera_setup = read_setup(io.BytesIO(setup), off_setup=0, off_image_offsets=len(setup))
+            self.camera_setup = read_setup(
+                io.BytesIO(setup), off_setup=0, off_image_offsets=len(setup)
+            )
             self.camera_setup._setup_data_loader = lambda: reader.block(5)
             self.image_locations = ImageOffsets(pImageData=b"", pImage=np.empty(0, dtype=np.uint64))
             version = self.file_header.Version
 
             def load_offsets():
                 raw = reader.block(6)
-                offsets = np.frombuffer(raw, dtype="<u8" if version == 1 else "<u4").astype(np.uint64, copy=False)
+                offsets = np.frombuffer(raw, dtype="<u8" if version == 1 else "<u4").astype(
+                    np.uint64, copy=False
+                )
                 return raw, np.append(offsets, np.uint64(reader.info.file_size))
 
             self.image_locations._lazy_loader = load_offsets
@@ -333,10 +350,12 @@ class Cine:
         """
         reader = self._require_file_handle()
         index = int(image_no) - self.first_frame_number
-        flags = (3 if self.canonical else 0)
+        flags = 3 if self.canonical else 0
         if convert_bgr_to_rgb:
             flags |= 2
-        frame, details, annotation = reader.load(index, flags=flags, annotations=self.keep_annotations)
+        frame, details, annotation = reader.load(
+            index, flags=flags, annotations=self.keep_annotations
+        )
         self._pending_frame = False
         self.current_frame = int(image_no)
         self.annotation_size = details.annotation_size
@@ -347,7 +366,9 @@ class Cine:
         self._image_data_pending = True
         if self.remove_dead_pixels:
             frame = self._repair_dead_pixels_array(frame)
-        self._pixel_array_channel_order = "RGB" if frame.ndim == 3 and flags & 2 else self._decoded_channel_order(frame)
+        self._pixel_array_channel_order = (
+            "RGB" if frame.ndim == 3 and flags & 2 else self._decoded_channel_order(frame)
+        )
         self._color_samples_from_raw_cfa = self._is_raw_bayer_frame(frame)
         self.red_pixels = self.green_pixels = self.blue_pixels = None
         self._color_samples_pending = frame
@@ -407,7 +428,9 @@ class Cine:
         self._pixel_array_channel_order = "RGB"
         self.pixel_data = self.pixel_array.reshape(-1)
 
-    def save_frames_to_new_file(self, output_filename: str | Path, start_frame: int, end_frame: int) -> None:
+    def save_frames_to_new_file(
+        self, output_filename: str | Path, start_frame: int, end_frame: int
+    ) -> None:
         """Write a trimmed CINE file for frame range `[start_frame, end_frame]`.
 
         Parameters
@@ -563,7 +586,9 @@ class Cine:
             out[..., idx] = self._require_pixel_array()
         return out
 
-    def get_frame_rgb(self, image_no: int | None = None, *, bayer_pattern: str = "auto") -> np.ndarray:
+    def get_frame_rgb(
+        self, image_no: int | None = None, *, bayer_pattern: str = "auto"
+    ) -> np.ndarray:
         """Return current or selected frame as RGB.
 
         Parameters
@@ -612,8 +637,12 @@ class Cine:
         dead_value: int | None = None,
         dead_is_threshold: bool | None = None,
     ) -> np.ndarray:
-        resolved_dead = self._resolve_dead_value(self.dead_value if dead_value is None else dead_value)
-        resolved_threshold = self.dead_is_threshold if dead_is_threshold is None else bool(dead_is_threshold)
+        resolved_dead = self._resolve_dead_value(
+            self.dead_value if dead_value is None else dead_value
+        )
+        resolved_threshold = (
+            self.dead_is_threshold if dead_is_threshold is None else bool(dead_is_threshold)
+        )
         return repair_dead_pixels(
             frame,
             dead_value=resolved_dead,
@@ -654,13 +683,18 @@ class Cine:
         if frame.ndim == 3 and frame.shape[-1] >= 3:
             image_header = self._require_image_header()
             channels = frame
-            if int(image_header.biBitCount) in (24, 48) and self._pixel_array_channel_order != "RGB":
+            if (
+                int(image_header.biBitCount) in (24, 48)
+                and self._pixel_array_channel_order != "RGB"
+            ):
                 channels = frame[..., ::-1]
             self.red_pixels = channels[..., 0].astype(np.float32, copy=True)
             self.green_pixels = channels[..., 1].astype(np.float32, copy=True)
             self.blue_pixels = channels[..., 2].astype(np.float32, copy=True)
 
-    def _raw_cfa_sample_arrays(self, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _raw_cfa_sample_arrays(
+        self, shape: tuple[int, int]
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         arrays = []
         for current in (self.red_pixels, self.green_pixels, self.blue_pixels):
             if current is not None and current.shape == shape and current.dtype == np.float32:
@@ -737,13 +771,13 @@ class Cine:
 
         cfa = self.cfa_code
         mapping = {
-            0: None,      # CFA_NONE
-            1: "GBRG",    # CFA_VRI (gbrg/rggb variants; best-effort default)
-            2: "BGGR",    # CFA_VRIV6 (bggr/grbg variants; best-effort default)
-            3: "GBRG",    # CFA_BAYER (gb/rg)
-            4: "RGGB",    # CFA_BAYERFLIP (rg/gb)
-            5: "GRBG",    # CFA_BAYERFLIPB (gr/bg variant)
-            6: "BGGR",    # CFA_BAYERFLIPH (bg/gr)
+            0: None,  # CFA_NONE
+            1: "GBRG",  # CFA_VRI (gbrg/rggb variants; best-effort default)
+            2: "BGGR",  # CFA_VRIV6 (bggr/grbg variants; best-effort default)
+            3: "GBRG",  # CFA_BAYER (gb/rg)
+            4: "RGGB",  # CFA_BAYERFLIP (rg/gb)
+            5: "GRBG",  # CFA_BAYERFLIPB (gr/bg variant)
+            6: "BGGR",  # CFA_BAYERFLIPH (bg/gr)
         }
         return mapping.get(cfa, None)
 
@@ -757,6 +791,7 @@ class Cine:
         if white_level >= 0:
             if int(self._require_image_header().biCompression) == 256 and white_level < 1024:
                 from ._lookup import LOOKUP_TABLE
+
                 white_level = int(LOOKUP_TABLE[white_level])
             return white_level + 1
 

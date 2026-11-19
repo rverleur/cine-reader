@@ -1,7 +1,6 @@
 """cine_reader package."""
 
 from .cine import Cine
-from .writer import CineWriter, write_cine, write_cine_from_images, write_cine_from_video
 from .headers import BitmapHeader, CineHeader, ImageOffsets, Setup
 from .image_ops import (
     demosaic_bilinear,
@@ -12,6 +11,7 @@ from .image_ops import (
 )
 from .stats import average_from_frame_iter, robust_background_mad_stack, robust_background_topk
 from .unpack import unpack_10bit_data, unpack_10bit_numpy
+from .writer import CineWriter, write_cine, write_cine_from_images, write_cine_from_video
 
 __all__ = [
     "Cine",

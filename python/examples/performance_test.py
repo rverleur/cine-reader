@@ -47,7 +47,7 @@ def benchmark_frame_loading(
 
     seconds_per_frame = elapsed / count
     frames_per_second = count / elapsed if elapsed > 0 else float("inf")
-    mib_loaded = frames.nbytes / (1024 ** 2)
+    mib_loaded = frames.nbytes / (1024**2)
     mib_per_second = mib_loaded / elapsed if elapsed > 0 else float("inf")
 
     print(f"Loaded shape: {frames.shape}, dtype: {frames.dtype}")
@@ -69,4 +69,4 @@ if __name__ == "__main__":
         debayer=True,
     )
 
-    print(f"Array memory: {loaded_frames.nbytes / (1024 ** 2):.2f} MiB")
+    print(f"Array memory: {loaded_frames.nbytes / (1024**2):.2f} MiB")

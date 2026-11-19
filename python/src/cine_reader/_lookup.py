@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+# Preserve the reference table's 16-code rows for comparison with the format manual.
+# fmt: off
 LOOKUP_TABLE = np.array([
        2,    5,    6,    7,    8,    9,   10,   11,   12,   13,   14,   15,   16,   17,   17,   18,
       19,   20,   21,   22,   23,   24,   25,   26,   27,   28,   29,   30,   31,   32,   33,   33,
@@ -70,3 +72,5 @@ LOOKUP_TABLE = np.array([
     3880, 3888, 3897, 3905, 3913, 3922, 3930, 3938, 3947, 3955, 3963, 3972, 3980, 3989, 3997, 4006,
     4014, 4022, 4031, 4039, 4048, 4056, 4064, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095, 4095,
 ], dtype=np.uint16)
+
+# fmt: on

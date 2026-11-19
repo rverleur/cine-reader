@@ -1,24 +1,24 @@
 classdef Cine < handle
-    %Cine Frame-wise Phantom CINE reader backed by the shared Rust library.
+    % Cine Frame-wise Phantom CINE reader backed by the shared Rust library.
     % Construction reads metadata only; accessing the initial frame decodes it.
     % PixelArray preserves the legacy storage-row / BGR conventions.
 
     %% Public config
     properties
-        filename          (1,1) string
-        UseMemMap         (1,1) logical = true
-        KeepAnnotations   (1,1) logical = false   % if true, stores AnnotationData each frame
-        AssumeConstAnn    (1,1) logical = true    % assume constant annotation size (fast path)
-        Debug             (1,1) logical = false   % extra checks (slower)
-        RemoveDeadPixels  (1,1) logical = false   % repair pixels on every LoadFrame
-        Debayer           (1,1) logical = false   % debayer raw CFA frames on every LoadFrame
+        filename          (1, 1) string
+        UseMemMap         (1, 1) logical = true
+        KeepAnnotations   (1, 1) logical = false   % if true, stores AnnotationData each frame
+        AssumeConstAnn    (1, 1) logical = true    % assume constant annotation size (fast path)
+        Debug             (1, 1) logical = false   % extra checks (slower)
+        RemoveDeadPixels  (1, 1) logical = false   % repair pixels on every LoadFrame
+        Debayer           (1, 1) logical = false   % debayer raw CFA frames on every LoadFrame
         DeadValue                         = []     % [] means use default uint16(4095)
-        BayerPattern      (1,1) string  = "auto"
+        BayerPattern      (1, 1) string  = "auto"
     end
 
     %% Public state
     properties
-        fid               (1,1) double = -1
+        fid               (1, 1) double = -1
         mm                                 % memmapfile
         FileHeader        struct
         ImageHeader       struct
@@ -40,7 +40,7 @@ classdef Cine < handle
         ImageSize
     end
 
-    properties (Access=private)
+    properties (Access = private)
         SetupCache struct
         SetupDataPending logical = false
         Backend uint64 = uint64(0)
@@ -63,13 +63,14 @@ classdef Cine < handle
 
     %% Lifecycle
     methods
+
         function obj = Cine(filename, varargin)
             if mod(numel(varargin), 2) ~= 0
                 error('Cine name/value options must be pairs.');
             end
             for i = 1:2:numel(varargin)
                 key = lower(string(varargin{i}));
-                val = varargin{i+1};
+                val = varargin{i + 1};
                 switch key
                     case "removedeadpixels"
                         obj.RemoveDeadPixels = logical(val);
@@ -87,13 +88,16 @@ classdef Cine < handle
                 obj.OpenCineFile(filename);
             end
         end
+
         function delete(obj)
             obj.releaseBackend();
         end
+
     end
 
     %% Public API
     methods
+
         function OpenCineFile(obj, filename)
             obj.releaseBackend();
             obj.filename = string(filename);
@@ -102,17 +106,25 @@ classdef Cine < handle
             obj.SetupDataPending = true;
             obj.CurrentFrame = int32(obj.FileHeader.FirstImageNo);
             obj.LocationsCache = uint64([]);
-            obj.Pixels = []; obj.RawPixels = [];
-            obj.Red = []; obj.Green = []; obj.Blue = [];
-            obj.ColorSampleFrame = []; obj.ColorSamplesPending = false;
-            obj.AnnSize = uint32(0); obj.AnnData = uint8([]);
-            obj.Ann = uint8([]); obj.PayloadSize = uint32(0);
+            obj.Pixels = [];
+            obj.RawPixels = [];
+            obj.Red = [];
+            obj.Green = [];
+            obj.Blue = [];
+            obj.ColorSampleFrame = [];
+            obj.ColorSamplesPending = false;
+            obj.AnnSize = uint32(0);
+            obj.AnnData = uint8([]);
+            obj.Ann = uint8([]);
+            obj.PayloadSize = uint32(0);
             obj.PendingFrame = obj.FileHeader.ImageCount > 0;
         end
 
         function CloseFile(obj)
             % Preserve legacy post-close state, including deferred metadata.
-            if obj.Backend == 0, return; end
+            if obj.Backend == 0
+                return
+            end
             cleanup = onCleanup(@() obj.releaseBackend());
             obj.ensureFrame();
             if obj.SetupDataPending
@@ -125,8 +137,10 @@ classdef Cine < handle
         end
 
         function NextFrame(obj, increment)
-            if nargin<2, increment = 1; end
-            validateattributes(increment, {'numeric'}, {'scalar','integer','finite'});
+            if nargin < 2
+                increment = 1;
+            end
+            validateattributes(increment, {'numeric'}, {'scalar', 'integer', 'finite'});
             obj.LoadFrame(double(obj.CurrentFrame) + double(increment));
         end
 
@@ -139,7 +153,7 @@ classdef Cine < handle
             obj.LoadingFrame = true;
             cleanup = onCleanup(@() obj.endLoading());
             if numel(obj.AnnData) >= 8
-                obj.Ann = obj.AnnData(5:end-4);
+                obj.Ann = obj.AnnData(5:end - 4);
             else
                 obj.Ann = uint8([]);
             end
@@ -157,10 +171,14 @@ classdef Cine < handle
         end
 
         function avgImg = AverageFrames(obj, start_frame, end_frame, replace, chunk_size)
-            %AVERAGEFRAMES Streaming mean; the Rust accumulator holds one frame.
-            if nargin < 4, replace = false; end
-            if nargin < 5 || isempty(chunk_size), chunk_size = 8; end
-            validateattributes(chunk_size, {'numeric'}, {'scalar','integer','positive'});
+            % AVERAGEFRAMES Streaming mean; the Rust accumulator holds one frame.
+            if nargin < 4
+                replace = false;
+            end
+            if nargin < 5 || isempty(chunk_size)
+                chunk_size = 8;
+            end
+            validateattributes(chunk_size, {'numeric'}, {'scalar', 'integer', 'positive'});
             obj.validateRange(start_frame, end_frame);
             accumulator = uint64(0);
             for fr = double(start_frame):double(end_frame)
@@ -182,11 +200,11 @@ classdef Cine < handle
         function SaveFramesToNewFile(obj, output_filename, start_frame, end_frame)
             obj.requireOpen();
             cine_backend('trim', obj.Backend, char(output_filename), ...
-                double(start_frame), double(end_frame));
+                         double(start_frame), double(end_frame));
         end
 
         function out = ModeFrames(obj, start_frame, end_frame, replace, varargin)
-            %MODEFRAMES Robust bright background estimate over frame range.
+            % MODEFRAMES Robust bright background estimate over frame range.
             %
             % Name/value options:
             %   "method"      : "auto" (default), "mad", "topk"
@@ -195,53 +213,69 @@ classdef Cine < handle
             %   "min_keep"    : minimum kept samples per pixel (default 3)
             %   "max_keep"    : cap for top-k memory (default 96, [] for unlimited)
             %   "stack_limit" : auto->mad threshold (default 128 frames)
-            if nargin<4, replace = false; end
+            if nargin < 4
+                replace = false;
+            end
             obj.validateRange(start_frame, end_frame);
 
             opts = struct( ...
-                "method", "auto", ...
-                "q_bg", 0.80, ...
-                "k_sigma", 2.5, ...
-                "min_keep", 3, ...
-                "max_keep", 96, ...
-                "stack_limit", 128 ...
-            );
-            if mod(numel(varargin),2) ~= 0
+                          "method", "auto", ...
+                          "q_bg", 0.80, ...
+                          "k_sigma", 2.5, ...
+                          "min_keep", 3, ...
+                          "max_keep", 96, ...
+                          "stack_limit", 128 ...
+                         );
+            if mod(numel(varargin), 2) ~= 0
                 error('ModeFrames name/value options must be pairs.');
             end
             for i = 1:2:numel(varargin)
                 key = lower(string(varargin{i}));
-                val = varargin{i+1};
+                val = varargin{i + 1};
                 switch key
-                    case "method",      opts.method = lower(string(val));
-                    case "q_bg",        opts.q_bg = double(val);
-                    case "k_sigma",     opts.k_sigma = double(val);
-                    case "min_keep",    opts.min_keep = double(val);
-                    case "max_keep",    opts.max_keep = val;
-                    case "stack_limit", opts.stack_limit = double(val);
-                    otherwise, error('Unknown ModeFrames option: %s', char(key));
+                    case "method"
+                        opts.method = lower(string(val));
+                    case "q_bg"
+                        opts.q_bg = double(val);
+                    case "k_sigma"
+                        opts.k_sigma = double(val);
+                    case "min_keep"
+                        opts.min_keep = double(val);
+                    case "max_keep"
+                        opts.max_keep = val;
+                    case "stack_limit"
+                        opts.stack_limit = double(val);
+                    otherwise
+                        error('Unknown ModeFrames option: %s', char(key));
                 end
             end
 
             obj.validateRange(start_frame, end_frame);
-            validateattributes(opts.q_bg, {'numeric'}, {'scalar','finite','>=',0,'<=',1});
-            validateattributes(opts.k_sigma, {'numeric'}, {'scalar','finite','nonnegative'});
-            validateattributes(opts.min_keep, {'numeric'}, {'scalar','integer','positive'});
-            validateattributes(opts.stack_limit, {'numeric'}, {'scalar','integer','nonnegative'});
+            validateattributes(opts.q_bg, {'numeric'}, {'scalar', 'finite', '>=', 0, '<=', 1});
+            validateattributes(opts.k_sigma, {'numeric'}, {'scalar', 'finite', 'nonnegative'});
+            validateattributes(opts.min_keep, {'numeric'}, {'scalar', 'integer', 'positive'});
+            validateattributes(opts.stack_limit, {'numeric'}, {'scalar', 'integer', 'nonnegative'});
             if ~isempty(opts.max_keep)
-                validateattributes(opts.max_keep, {'numeric'}, {'scalar','integer','positive'});
+                validateattributes(opts.max_keep, {'numeric'}, {'scalar', 'integer', 'positive'});
             end
             frameCount = double(end_frame - start_frame + 1);
             method = opts.method;
             if method == "auto"
-                if frameCount <= opts.stack_limit, method = "mad"; else, method = "topk"; end
+                if frameCount <= opts.stack_limit
+                    method = "mad";
+                else
+                    method = "topk";
+                end
             end
             if method == "mad"
-                mode = 2; kKeep = 0;
+                mode = 2;
+                kKeep = 0;
             elseif method == "topk"
                 mode = 1;
                 kKeep = max(opts.min_keep, ceil((1 - opts.q_bg) * frameCount));
-                if ~isempty(opts.max_keep), kKeep = min(kKeep, double(opts.max_keep)); end
+                if ~isempty(opts.max_keep)
+                    kKeep = min(kKeep, double(opts.max_keep));
+                end
                 kKeep = max(1, kKeep);
             else
                 error('ModeFrames method must be auto, mad, or topk.');
@@ -250,13 +284,15 @@ classdef Cine < handle
             for fr = double(start_frame):double(end_frame)
                 obj.LoadFrame(fr);
                 pix = obj.PixelArray;
-                if ~ismatrix(pix), error('ModeFrames supports mono frames only.'); end
+                if ~ismatrix(pix)
+                    error('ModeFrames supports mono frames only.');
+                end
                 if replace && ~obj.RemoveDeadPixels
                     pix = cine_replace_dead_pixels(pix, 4095, obj.isRawColorCfaFrame(pix));
                 end
                 if accumulator == 0
                     accumulator = cine_backend('stats_open', double(numel(pix)), mode + 256, ...
-                        double(kKeep), opts.q_bg, opts.k_sigma, double(opts.min_keep));
+                                               double(kKeep), opts.q_bg, opts.k_sigma, double(opts.min_keep));
                     cleanup = onCleanup(@() cine_backend('stats_close', accumulator));
                 end
                 cine_backend('stats_push', accumulator, double(pix));
@@ -266,43 +302,46 @@ classdef Cine < handle
         end
 
         function rgb = GetFrameRGB(obj, frame_no, bayer_pattern)
-            if nargin>=2 && ~isempty(frame_no)
+            if nargin >= 2 && ~isempty(frame_no)
                 obj.LoadFrame(int32(frame_no));
             end
-            if nargin<3 || isempty(bayer_pattern)
+            if nargin < 3 || isempty(bayer_pattern)
                 bayer_pattern = obj.resolveBayerPattern();
             end
 
-            if ndims(obj.PixelArray)==3
+            if ndims(obj.PixelArray) == 3
                 if obj.PixelsAreRGB
                     rgb = obj.PixelArray;
                 else
-                    rgb = obj.PixelArray(:,:,[3 2 1]);
+                    rgb = obj.PixelArray(:, :, [3 2 1]);
                 end
-                return;
+                return
             end
             if ismatrix(obj.PixelArray)
                 rgb = cine_demosaic_bilinear(obj.PixelArray, bayer_pattern);
-                return;
+                return
             end
             error('Unsupported frame shape for RGB conversion.');
         end
 
         function ReplaceDeadPixels(obj, dead_value)
-            if nargin<2, dead_value = obj.resolveDeadValue(); end
+            if nargin < 2
+                dead_value = obj.resolveDeadValue();
+            end
             obj.PixelArray = cine_replace_dead_pixels( ...
-                obj.PixelArray, dead_value, obj.isRawColorCfaFrame(obj.PixelArray));
+                                                      obj.PixelArray, dead_value, ...
+                                                      obj.isRawColorCfaFrame(obj.PixelArray));
             if ~obj.isRawColorCfaFrame(obj.RawPixelArray) || ndims(obj.PixelArray) ~= 3
                 obj.updateColorSampleArrays(obj.PixelArray);
             end
         end
 
         function DebayerFrame(obj, bayer_pattern)
-            if nargin<2 || isempty(bayer_pattern)
+            if nargin < 2 || isempty(bayer_pattern)
                 bayer_pattern = obj.resolveBayerPattern();
             end
-            if ndims(obj.PixelArray)==3
-                return;
+            if ndims(obj.PixelArray) == 3
+                return
             end
             if ~obj.isRawColorCfaFrame(obj.PixelArray)
                 error('Current frame is not a raw color CFA/Bayer frame.');
@@ -316,48 +355,50 @@ classdef Cine < handle
             % Minimal batch API: loads count frames into a 3-D array.
             % Mono/raw CFA returns [H x W x count].
             % Debayered/interpolated RGB returns [H x W x 3 x count].
-            validateattributes(count, {'numeric'}, {'scalar','integer','positive','finite'});
+            validateattributes(count, {'numeric'}, {'scalar', 'integer', 'positive', 'finite'});
             stop_frame = double(start_frame) + double(count) - 1;
             obj.validateRange(start_frame, stop_frame);
 
             h = abs(double(obj.ImageHeader.biHeight));
             w = double(obj.ImageHeader.biWidth);
             bc = double(obj.ImageHeader.biBitCount);
-            colorBatch = (obj.Debayer && obj.isRawColorCfa()) || bc==24 || bc==48;
+            colorBatch = (obj.Debayer && obj.isRawColorCfa()) || bc == 24 || bc == 48;
 
-            if bc==8
+            if bc == 8
                 if colorBatch
-                    out = zeros(h,w,3,count,'uint8');
+                    out = zeros(h, w, 3, count, 'uint8');
                 else
-                    out = zeros(h,w,count,'uint8');
+                    out = zeros(h, w, count, 'uint8');
                 end
-            elseif bc==16
+            elseif bc == 16
                 if colorBatch
-                    out = zeros(h,w,3,count,'uint16');
+                    out = zeros(h, w, 3, count, 'uint16');
                 else
-                    out = zeros(h,w,count,'uint16');
+                    out = zeros(h, w, count, 'uint16');
                 end
-            elseif bc==24
-                out = zeros(h,w,3,count,'uint8');
-            elseif bc==48
-                out = zeros(h,w,3,count,'uint16');
+            elseif bc == 24
+                out = zeros(h, w, 3, count, 'uint8');
+            elseif bc == 48
+                out = zeros(h, w, 3, count, 'uint16');
             else
                 error('Unsupported biBitCount for batch: %d', bc);
             end
 
-            for i = 0:count-1
+            for i = 0:count - 1
                 obj.LoadFrame(double(start_frame) + double(i));
                 if colorBatch
-                    out(:,:,:,i+1) = obj.PixelArray;
+                    out(:, :, :, i + 1) = obj.PixelArray;
                 else
-                    out(:,:,i+1) = obj.PixelArray;
+                    out(:, :, i + 1) = obj.PixelArray;
                 end
             end
         end
+
     end
 
     %% Private helpers
-    methods (Access=private)
+    methods (Access = private)
+
         function releaseBackend(obj)
             if obj.Backend ~= 0
                 handle = obj.Backend;
@@ -365,12 +406,13 @@ classdef Cine < handle
                 cine_backend('close', handle);
             end
             obj.PendingFrame = false;
-            obj.fid = -1; obj.mm = [];
+            obj.fid = -1;
+            obj.mm = [];
         end
 
         function validateRange(obj, first, last)
-            validateattributes(first, {'numeric'}, {'scalar','integer','finite'});
-            validateattributes(last, {'numeric'}, {'scalar','integer','finite'});
+            validateattributes(first, {'numeric'}, {'scalar', 'integer', 'finite'});
+            validateattributes(last, {'numeric'}, {'scalar', 'integer', 'finite'});
             firstNo = double(obj.FileHeader.FirstImageNo);
             lastNo = firstNo + double(obj.FileHeader.ImageCount) - 1;
             if first < firstNo || last > lastNo || last < first
@@ -408,11 +450,11 @@ classdef Cine < handle
         function pattern = resolveBayerPattern(obj)
             if obj.BayerPattern ~= "auto"
                 pattern = upper(obj.BayerPattern);
-                return;
+                return
             end
             if ~isfield(obj.SetupCache, 'CFA')
                 pattern = "RGGB";
-                return;
+                return
             end
 
             switch double(obj.SetupCache.CFA)
@@ -448,7 +490,9 @@ classdef Cine < handle
 
         function ensureColorSampleArrays(obj)
             obj.ensureFrame();
-            if ~obj.ColorSamplesPending, return; end
+            if ~obj.ColorSamplesPending
+                return
+            end
             obj.ColorSamplesPending = false;
             frame = obj.ColorSampleFrame;
             if obj.isRawColorCfaFrame(frame)
@@ -467,7 +511,7 @@ classdef Cine < handle
                             obj.BluePixels(rows, cols) = frameF(rows, cols);
                     end
                 end
-                return;
+                return
             end
 
             obj.RedPixels = [];
@@ -478,11 +522,11 @@ classdef Cine < handle
                 if obj.PixelsAreRGB
                     rgb = frame;
                 else
-                    rgb = frame(:,:,[3 2 1]);
+                    rgb = frame(:, :, [3 2 1]);
                 end
-                obj.RedPixels = single(rgb(:,:,1));
-                obj.GreenPixels = single(rgb(:,:,2));
-                obj.BluePixels = single(rgb(:,:,3));
+                obj.RedPixels = single(rgb(:, :, 1));
+                obj.GreenPixels = single(rgb(:, :, 2));
+                obj.BluePixels = single(rgb(:, :, 3));
             end
         end
 
@@ -522,6 +566,7 @@ classdef Cine < handle
     end
 
     methods
+
         function value = get.CameraSetup(obj)
             if obj.SetupDataPending
                 obj.requireOpen();
@@ -530,10 +575,12 @@ classdef Cine < handle
             end
             value = obj.SetupCache;
         end
+
         function set.CameraSetup(obj, value)
             obj.SetupCache = value;
             obj.SetupDataPending = false;
         end
+
         function value = get.ImageLocations(obj)
             if isempty(obj.LocationsCache)
                 obj.requireOpen();
@@ -541,63 +588,92 @@ classdef Cine < handle
             end
             value = obj.LocationsCache;
         end
+
         function set.ImageLocations(obj, value)
             obj.LocationsCache = uint64(value);
         end
+
         function value = get.PixelArray(obj)
-            obj.ensureFrame(); value = obj.Pixels;
+            obj.ensureFrame();
+            value = obj.Pixels;
         end
+
         function set.PixelArray(obj, value)
             obj.PendingFrame = false;
             obj.Pixels = value;
         end
+
         function value = get.RawPixelArray(obj)
-            obj.ensureFrame(); value = obj.RawPixels;
+            obj.ensureFrame();
+            value = obj.RawPixels;
         end
+
         function set.RawPixelArray(obj, value)
             obj.RawPixels = value;
         end
+
         function value = get.RedPixels(obj)
-            obj.ensureColorSampleArrays(); value = obj.Red;
+            obj.ensureColorSampleArrays();
+            value = obj.Red;
         end
+
         function set.RedPixels(obj, value)
             obj.Red = value;
         end
+
         function value = get.GreenPixels(obj)
-            obj.ensureColorSampleArrays(); value = obj.Green;
+            obj.ensureColorSampleArrays();
+            value = obj.Green;
         end
+
         function set.GreenPixels(obj, value)
             obj.Green = value;
         end
+
         function value = get.BluePixels(obj)
-            obj.ensureColorSampleArrays(); value = obj.Blue;
+            obj.ensureColorSampleArrays();
+            value = obj.Blue;
         end
+
         function set.BluePixels(obj, value)
             obj.Blue = value;
         end
+
         function value = get.AnnotationSize(obj)
-            obj.ensureFrame(); value = obj.AnnSize;
+            obj.ensureFrame();
+            value = obj.AnnSize;
         end
+
         function set.AnnotationSize(obj, value)
             obj.AnnSize = value;
         end
+
         function value = get.AnnotationData(obj)
-            obj.ensureFrame(); value = obj.AnnData;
+            obj.ensureFrame();
+            value = obj.AnnData;
         end
+
         function set.AnnotationData(obj, value)
             obj.AnnData = value;
         end
+
         function value = get.Annotation(obj)
-            obj.ensureFrame(); value = obj.Ann;
+            obj.ensureFrame();
+            value = obj.Ann;
         end
+
         function set.Annotation(obj, value)
             obj.Ann = value;
         end
+
         function value = get.ImageSize(obj)
-            obj.ensureFrame(); value = obj.PayloadSize;
+            obj.ensureFrame();
+            value = obj.PayloadSize;
         end
+
         function set.ImageSize(obj, value)
             obj.PayloadSize = value;
         end
+
     end
 end

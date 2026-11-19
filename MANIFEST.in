@@ -27,6 +27,7 @@ include Cargo.toml
 include Cargo.lock
 graft scripts
 include docs/BUILDING.md
+include docs/DEVELOPMENT.md
 include docs/VALIDATION.md
 include rust/cine-core/README.md
 

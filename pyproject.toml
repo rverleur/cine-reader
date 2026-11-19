@@ -41,7 +41,19 @@ dev = [
   "build>=1.2",
   "pytest>=8.0",
   "twine>=5.0",
+  "Pillow>=9",
+  "ruff==0.17.6",
+  "miss-hit==0.9.44",
 ]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+src = ["python/src"]
+extend-exclude = ["build", "dist", "release", "target"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.setuptools]
 package-dir = {"" = "python/src"}

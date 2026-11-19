@@ -1,10 +1,11 @@
 """Packed 10-bit helpers backed by the shared Rust decoder."""
+
 from __future__ import annotations
 
 import numpy as np
 
-from ._native import check, library
 from ._lookup import LOOKUP_TABLE
+from ._native import check, library
 
 
 def unpack_10bit_data(data: bytes) -> np.ndarray:
@@ -14,8 +15,10 @@ def unpack_10bit_data(data: bytes) -> np.ndarray:
     result = np.empty(samples, dtype=np.uint16)
     if samples:
         lib = library()
-        check(lib.cine_unpack10(payload.ctypes.data, samples // 4 * 5,
-                               result.ctypes.data, samples), lib)
+        check(
+            lib.cine_unpack10(payload.ctypes.data, samples // 4 * 5, result.ctypes.data, samples),
+            lib,
+        )
     return result
 
 

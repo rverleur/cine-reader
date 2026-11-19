@@ -15,11 +15,11 @@ def _decode_text(raw: bytes) -> str:
 
 
 def _f32(data: bytes, start: int) -> float:
-    return struct.unpack("<f", data[start:start + 4].ljust(4, b"\0"))[0]
+    return struct.unpack("<f", data[start : start + 4].ljust(4, b"\0"))[0]
 
 
 def _f64(data: bytes, start: int) -> float:
-    return struct.unpack("<d", data[start:start + 8].ljust(8, b"\0"))[0]
+    return struct.unpack("<d", data[start : start + 8].ljust(8, b"\0"))[0]
 
 
 @dataclass
@@ -263,23 +263,23 @@ def read_setup(
     values["SigOption"] = int.from_bytes(setup_data[146:148], "little", signed=False)
     values["BinChannels"] = int.from_bytes(setup_data[148:150], "little", signed=True)
     values["SamplesPerImage"] = int.from_bytes(setup_data[150:151], "little", signed=False)
-    values["BinName"] = [setup_data[151 + 11 * i:162 + 11 * i] for i in range(8)]
+    values["BinName"] = [setup_data[151 + 11 * i : 162 + 11 * i] for i in range(8)]
     values["AnaOption"] = int.from_bytes(setup_data[239:241], "little", signed=False)
     values["AnaChannels"] = int.from_bytes(setup_data[241:243], "little", signed=True)
     values["Res6"] = int.from_bytes(setup_data[243:244], "little", signed=False)
     values["AnaBoard"] = int.from_bytes(setup_data[244:245], "little", signed=False)
     values["ChOption"] = [
-        int.from_bytes(setup_data[245 + 2 * i:247 + 2 * i], "little", signed=False)
+        int.from_bytes(setup_data[245 + 2 * i : 247 + 2 * i], "little", signed=False)
         for i in range(8)
     ]
     values["AnaGain"] = [_f32(setup_data, 261 + 4 * i) for i in range(8)]
-    values["AnaUnit"] = [setup_data[293 + 6 * i:299 + 6 * i] for i in range(8)]
-    values["AnaName"] = [setup_data[341 + 11 * i:352 + 11 * i] for i in range(8)]
+    values["AnaUnit"] = [setup_data[293 + 6 * i : 299 + 6 * i] for i in range(8)]
+    values["AnaName"] = [setup_data[341 + 11 * i : 352 + 11 * i] for i in range(8)]
     values["lFirstImage"] = int.from_bytes(setup_data[429:433], "little", signed=True)
     values["dwImageCount"] = int.from_bytes(setup_data[433:437], "little", signed=False)
     values["nQFactor"] = int.from_bytes(setup_data[437:439], "little", signed=True)
     values["wCineFileType"] = int.from_bytes(setup_data[439:441], "little", signed=False)
-    values["szCinePath"] = [setup_data[441 + 65 * i:506 + 65 * i] for i in range(4)]
+    values["szCinePath"] = [setup_data[441 + 65 * i : 506 + 65 * i] for i in range(4)]
     values["Res14"] = int.from_bytes(setup_data[701:703], "little", signed=False)
     values["Res15"] = int.from_bytes(setup_data[703:704], "little", signed=False)
     values["Res16"] = int.from_bytes(setup_data[704:705], "little", signed=False)
@@ -319,7 +319,9 @@ def read_setup(
     values["AutoExpSpeed"] = int.from_bytes(setup_data[832:836], "little", signed=False)
     values["AutoExpRect"] = [
         [
-            int.from_bytes(setup_data[836 + 4 * a + 8 * b:840 + 4 * a + 8 * b], "little", signed=False)
+            int.from_bytes(
+                setup_data[836 + 4 * a + 8 * b : 840 + 4 * a + 8 * b], "little", signed=False
+            )
             for a in range(2)
         ]
         for b in range(2)
@@ -336,7 +338,10 @@ def read_setup(
         int.from_bytes(setup_data[916:920], "little", signed=True),
         int.from_bytes(setup_data[920:924], "little", signed=True),
         int.from_bytes(setup_data[924:928], "little", signed=True),
-        [int.from_bytes(setup_data[928 + 4 * a:932 + 4 * a], "little", signed=True) for a in range(25)],
+        [
+            int.from_bytes(setup_data[928 + 4 * a : 932 + 4 * a], "little", signed=True)
+            for a in range(25)
+        ],
     ]
     values["BlackCalSVer"] = int.from_bytes(setup_data[1028:1032], "little", signed=False)
     values["WhiteCalSVer"] = int.from_bytes(setup_data[1032:1036], "little", signed=False)
@@ -344,9 +349,18 @@ def read_setup(
     values["bStampTime"] = bool(int.from_bytes(setup_data[1040:1044], "little", signed=False))
     values["SoundDest"] = int.from_bytes(setup_data[1044:1048], "little", signed=False)
     values["FRPSteps"] = int.from_bytes(setup_data[1048:1052], "little", signed=False)
-    values["FRPImgNr"] = [int.from_bytes(setup_data[1052 + 4 * a:1056 + 4 * a], "little", signed=True) for a in range(16)]
-    values["FRPRate"] = [int.from_bytes(setup_data[1116 + 4 * a:1120 + 4 * a], "little", signed=False) for a in range(16)]
-    values["FRPExp"] = [int.from_bytes(setup_data[1180 + 4 * a:1184 + 4 * a], "little", signed=False) for a in range(16)]
+    values["FRPImgNr"] = [
+        int.from_bytes(setup_data[1052 + 4 * a : 1056 + 4 * a], "little", signed=True)
+        for a in range(16)
+    ]
+    values["FRPRate"] = [
+        int.from_bytes(setup_data[1116 + 4 * a : 1120 + 4 * a], "little", signed=False)
+        for a in range(16)
+    ]
+    values["FRPExp"] = [
+        int.from_bytes(setup_data[1180 + 4 * a : 1184 + 4 * a], "little", signed=False)
+        for a in range(16)
+    ]
     values["MCCnt"] = int.from_bytes(setup_data[1244:1248], "little", signed=True)
     values["MCPercent"] = [_f32(setup_data, 1248 + 4 * a) for a in range(64)]
     values["CICalib"] = int.from_bytes(setup_data[1504:1508], "little", signed=False)
@@ -356,7 +370,10 @@ def read_setup(
     values["CalibExp"] = int.from_bytes(setup_data[1520:1524], "little", signed=False)
     values["CalibEDR"] = int.from_bytes(setup_data[1524:1528], "little", signed=False)
     values["CalibTemp"] = int.from_bytes(setup_data[1528:1532], "little", signed=False)
-    values["HeadSerial"] = [int.from_bytes(setup_data[1532 + 4 * a:1536 + 4 * a], "little", signed=False) for a in range(4)]
+    values["HeadSerial"] = [
+        int.from_bytes(setup_data[1532 + 4 * a : 1536 + 4 * a], "little", signed=False)
+        for a in range(4)
+    ]
     values["RangeCode"] = int.from_bytes(setup_data[1548:1552], "little", signed=False)
     values["RangeSize"] = int.from_bytes(setup_data[1552:1556], "little", signed=False)
     values["Decimation"] = int.from_bytes(setup_data[1556:1560], "little", signed=False)
@@ -374,7 +391,9 @@ def read_setup(
     values["FilterTime"] = int.from_bytes(setup_data[5696:5700], "little", signed=False)
     values["LongReady"] = bool(int.from_bytes(setup_data[5700:5704], "little", signed=False))
     values["ShutterOff"] = bool(int.from_bytes(setup_data[5704:5708], "little", signed=False))
-    values["Res4"] = [int.from_bytes(setup_data[5708 + a:5709 + a], "little", signed=False) for a in range(16)]
+    values["Res4"] = [
+        int.from_bytes(setup_data[5708 + a : 5709 + a], "little", signed=False) for a in range(16)
+    ]
     values["bMetaWB"] = bool(int.from_bytes(setup_data[5724:5728], "little", signed=False))
     values["Hue"] = int.from_bytes(setup_data[5728:5732], "little", signed=True)
     values["BlackLevel"] = int.from_bytes(setup_data[5732:5736], "little", signed=True)
@@ -397,14 +416,18 @@ def read_setup(
     values["fChroma"] = _f32(setup_data, 6052)
     values["ToneLabel"] = _decode_text(setup_data[6056:6312])
     values["TonePoints"] = int.from_bytes(setup_data[6312:6316], "little", signed=True)
-    values["fTone"] = [[_f32(setup_data, 6316 + 4 * b + 8 * a) for b in range(2)] for a in range(32)]
+    values["fTone"] = [
+        [_f32(setup_data, 6316 + 4 * b + 8 * a) for b in range(2)] for a in range(32)
+    ]
     values["UserMatrixLabel"] = _decode_text(setup_data[6572:6828])
     values["EnableMatrices"] = bool(int.from_bytes(setup_data[6828:6832], "little", signed=False))
     values["cmUser"] = [_f32(setup_data, 6832 + 4 * b) for b in range(9)]
     values["EnableCrop"] = bool(int.from_bytes(setup_data[6868:6872], "little", signed=False))
     values["CropRect"] = [
         [
-            int.from_bytes(setup_data[6872 + 4 * a + 8 * b:6876 + 4 * a + 8 * b], "little", signed=False)
+            int.from_bytes(
+                setup_data[6872 + 4 * a + 8 * b : 6876 + 4 * a + 8 * b], "little", signed=False
+            )
             for a in range(2)
         ]
         for b in range(2)
@@ -413,7 +436,10 @@ def read_setup(
     values["ResampleWidth"] = int.from_bytes(setup_data[6892:6896], "little", signed=False)
     values["ResampleHeight"] = int.from_bytes(setup_data[6896:6900], "little", signed=False)
     values["fGain16"] = _f32(setup_data, 6900)
-    values["FRPShape"] = [int.from_bytes(setup_data[6904 + 4 * a:6908 + 4 * a], "little", signed=False) for a in range(16)]
+    values["FRPShape"] = [
+        int.from_bytes(setup_data[6904 + 4 * a : 6908 + 4 * a], "little", signed=False)
+        for a in range(16)
+    ]
     values["TrigTC"] = int.from_bytes(setup_data[6968:6976], "little", signed=False)
     values["fPbRate"] = _f32(setup_data, 6976)
     values["fTcRate"] = _f32(setup_data, 6980)
@@ -442,7 +468,9 @@ def read_setup(
     values["dFrameRate"] = _f64(setup_data, 10400)
     values["SensorMode"] = int.from_bytes(setup_data[10408:10412], "little", signed=False)
     values["UndecFirst"] = int.from_bytes(setup_data[10412:10416], "little", signed=False)
-    values["SupportsBinning"] = bool(int.from_bytes(setup_data[10416:10420], "little", signed=False))
+    values["SupportsBinning"] = bool(
+        int.from_bytes(setup_data[10416:10420], "little", signed=False)
+    )
     values["UvSensor"] = bool(int.from_bytes(setup_data[10420:10424], "little", signed=False))
     values["AnaDaqDescription"] = setup_data[10424:10552]
     values["BinDaqDescription"] = setup_data[10552:10680]

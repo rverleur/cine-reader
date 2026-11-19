@@ -59,7 +59,7 @@ fn normal_mono_has_bottom_up_tightly_packed_u16_rows() {
             frame_count: 1,
             ..WriterOptions::default()
         },
-        &[frame.clone()],
+        std::slice::from_ref(&frame),
     );
     let bytes = fs::read(&path).unwrap();
     assert_eq!(&bytes[..2], b"CI");
@@ -95,7 +95,7 @@ fn normal_rgb_stores_bgr_and_roundtrips_both_container_sizes() {
                 frame_count: 1,
                 ..WriterOptions::default()
             },
-            &[frame.clone()],
+            std::slice::from_ref(&frame),
         );
         let bytes = fs::read(&path).unwrap();
         let offset = frame_offset(&bytes, 0) + 8;

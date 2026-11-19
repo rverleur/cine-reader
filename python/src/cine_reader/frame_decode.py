@@ -1,4 +1,5 @@
 """Compatibility wrapper around Rust's standalone frame decoder."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -39,6 +40,18 @@ def decode_frame_payload(
     output = np.empty(shape, dtype=np.uint8 if bit_count in (8, 24) else "<u2")
     payload = np.frombuffer(raw, dtype=np.uint8)
     lib = library()
-    check(lib.cine_decode(payload.ctypes.data, payload.nbytes, width, height_signed,
-                          bit_count, compression, 0, output.ctypes.data, output.nbytes), lib)
+    check(
+        lib.cine_decode(
+            payload.ctypes.data,
+            payload.nbytes,
+            width,
+            height_signed,
+            bit_count,
+            compression,
+            0,
+            output.ctypes.data,
+            output.nbytes,
+        ),
+        lib,
+    )
     return output

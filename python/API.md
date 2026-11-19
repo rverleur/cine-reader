@@ -137,8 +137,9 @@ write_cine_from_video("video.cine", "input.mp4")
 with Cine("normal.cine", canonical=True) as cine:
     image = cine.image
 
-with CineWriter("stream.cine", width=640, height=480, dtype="uint16",
-                frame_count=100, frame_rate=1000) as writer:
+with CineWriter(
+    "stream.cine", width=640, height=480, dtype="uint16", frame_count=100, frame_rate=1000
+) as writer:
     for frame in source:
         writer.write_frame(frame)
 ```

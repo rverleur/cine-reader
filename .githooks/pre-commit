@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+unset CINE_CHECK_SNAPSHOT
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+python=$(git config --local --get cine.python || true)
+if [ -z "$python" ]; then
+    if [ -x "$root/.venv/bin/python" ]; then
+        python="$root/.venv/bin/python"
+    elif [ -f "$root/.venv/Scripts/python.exe" ]; then
+        python="$root/.venv/Scripts/python.exe"
+    else
+        echo 'Commit blocked: run scripts/install_hooks.py using the project virtual environment.' >&2
+        exit 1
+    fi
+fi
+exec "$python" "$root/scripts/check_commit.py"

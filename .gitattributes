@@ -1,0 +1,6 @@
+.githooks/* text eol=lf
+*.py text eol=lf
+*.rs text eol=lf
+*.m text eol=lf
+*.toml text eol=lf
+miss_hit.cfg text eol=lf

@@ -131,5 +131,6 @@ python -m pytest python/tests -q
 ```
 
 [Validation notes](docs/VALIDATION.md) record corpus checks, independent comparisons,
-performance measurements and remaining platform validation. No publishing, CI,
-or commit-hook changes are included in this refactor.
+performance measurements and remaining platform validation. See the
+[development guide](docs/DEVELOPMENT.md) to install the commit gate, format working
+files and run staged build/lint/test checks. Publishing and CI changes remain separate.

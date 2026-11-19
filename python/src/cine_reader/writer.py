@@ -1,17 +1,19 @@
 """Streaming Python conveniences around the shared Rust CINE encoder."""
+
 from __future__ import annotations
 
-from itertools import chain
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from itertools import chain
+from pathlib import Path
 from typing import Iterable, Iterator
 
 import numpy as np
 
 from ._native import NativeWriter
+
 
 class CineWriter:
     """Write frames incrementally, publishing a complete file on successful close.
@@ -57,7 +59,11 @@ class CineWriter:
             raise ValueError("frame_count must be a positive integer or None")
         self.width, self.height, self.channels = int(width), int(height), int(channels)
         self.encoding = encoding
-        self.bit_depth = (12 if encoding == "packed10" else self.dtype.itemsize * 8) if bit_depth is None else int(bit_depth)
+        self.bit_depth = (
+            (12 if encoding == "packed10" else self.dtype.itemsize * 8)
+            if bit_depth is None
+            else int(bit_depth)
+        )
         if encoding == "normal" and ((self.bit_depth == 8) != (self.dtype.itemsize == 1)):
             raise ValueError("normal bit_depth=8 requires uint8; bit_depth=9..16 requires uint16")
         self.cfa = int(cfa)
@@ -158,7 +164,9 @@ def write_cine(filename: str | Path, frames: Iterable[np.ndarray], **options) ->
     return Path(filename)
 
 
-def write_cine_from_images(filename: str | Path, image_paths: Iterable[str | Path], **options) -> Path:
+def write_cine_from_images(
+    filename: str | Path, image_paths: Iterable[str | Path], **options
+) -> Path:
     """Encode image files in their supplied order using optional Pillow.
 
     Paths are not sorted implicitly. RGB, grayscale and 16-bit grayscale are
@@ -167,7 +175,9 @@ def write_cine_from_images(filename: str | Path, image_paths: Iterable[str | Pat
     try:
         from PIL import Image
     except ImportError as exc:
-        raise ImportError("Install image-file support with: pip install 'cine-handler[images]'") from exc
+        raise ImportError(
+            "Install image-file support with: pip install 'cine-handler[images]'"
+        ) from exc
     if "frame_count" not in options:
         try:
             options["frame_count"] = len(image_paths)
@@ -182,7 +192,12 @@ def write_cine_from_images(filename: str | Path, image_paths: Iterable[str | Pat
                 elif image.mode in ("1", "LA"):
                     image = image.convert("L")
                 pixels = np.asarray(image)
-                if pixels.dtype.kind == "i" and pixels.size and pixels.min() >= 0 and pixels.max() <= 65535:
+                if (
+                    pixels.dtype.kind == "i"
+                    and pixels.size
+                    and pixels.min() >= 0
+                    and pixels.max() <= 65535
+                ):
                     pixels = pixels.astype(np.uint16)
                 yield pixels
 
@@ -212,8 +227,21 @@ def write_cine_from_video(
         if not shutil.which(executable):
             raise FileNotFoundError(f"Required video tool was not found: {executable}")
     metadata = subprocess.run(
-        [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate", "-of", "json", str(video_filename)],
-        check=True, capture_output=True, text=True,
+        [
+            ffprobe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,avg_frame_rate,r_frame_rate",
+            "-of",
+            "json",
+            str(video_filename),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     streams = json.loads(metadata.stdout).get("streams", [])
     if not streams:
@@ -235,13 +263,40 @@ def write_cine_from_video(
     channels = 1 if grayscale else 3
     shape = (height, width) + (() if grayscale else (3,))
     frame_bytes = width * height * channels
-    command = [ffmpeg, "-v", "error", "-noautorotate", "-i", str(video_filename), "-map", "0:v:0", "-an", "-sn", "-dn", "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "gray" if grayscale else "rgb24", "pipe:1"]
+    command = [
+        ffmpeg,
+        "-v",
+        "error",
+        "-noautorotate",
+        "-i",
+        str(video_filename),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-sn",
+        "-dn",
+        "-vsync",
+        "0",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "gray" if grayscale else "rgb24",
+        "pipe:1",
+    ]
     with tempfile.TemporaryFile() as errors:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
         assert process.stdout is not None
         try:
-            with CineWriter(filename, width=width, height=height, channels=channels, dtype=np.uint8,
-                            encoding=encoding, frame_rate=frame_rate, **options) as writer:
+            with CineWriter(
+                filename,
+                width=width,
+                height=height,
+                channels=channels,
+                dtype=np.uint8,
+                encoding=encoding,
+                frame_rate=frame_rate,
+                **options,
+            ) as writer:
                 while True:
                     payload = bytearray(frame_bytes)
                     view = memoryview(payload)
@@ -259,7 +314,9 @@ def write_cine_from_video(
                 status = process.wait()
                 if status:
                     errors.seek(0)
-                    raise RuntimeError(f"FFmpeg decoding failed: {errors.read().decode(errors='replace')}")
+                    raise RuntimeError(
+                        f"FFmpeg decoding failed: {errors.read().decode(errors='replace')}"
+                    )
                 if writer.frames_written == 0:
                     raise ValueError("Video contains no decoded frames")
         finally:

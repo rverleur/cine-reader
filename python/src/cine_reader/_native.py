@@ -1,25 +1,32 @@
 """Private ctypes binding for the versioned, shared Rust CINE ABI."""
+
 from __future__ import annotations
 
 import ctypes as ct
-from functools import lru_cache
 import io
 import os
-from pathlib import Path
 import sys
 import threading
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
 
 class CineInfo(ct.Structure):
     _fields_ = [
-        ("width", ct.c_uint32), ("height", ct.c_int32),
-        ("bit_count", ct.c_uint32), ("compression", ct.c_uint32),
-        ("real_bpp", ct.c_uint32), ("cfa", ct.c_uint32),
-        ("frame_count", ct.c_uint32), ("first_frame", ct.c_int32),
-        ("channels", ct.c_uint32), ("sample_bytes", ct.c_uint32),
-        ("decoded_bytes", ct.c_uint64), ("file_size", ct.c_uint64),
+        ("width", ct.c_uint32),
+        ("height", ct.c_int32),
+        ("bit_count", ct.c_uint32),
+        ("compression", ct.c_uint32),
+        ("real_bpp", ct.c_uint32),
+        ("cfa", ct.c_uint32),
+        ("frame_count", ct.c_uint32),
+        ("first_frame", ct.c_int32),
+        ("channels", ct.c_uint32),
+        ("sample_bytes", ct.c_uint32),
+        ("decoded_bytes", ct.c_uint64),
+        ("file_size", ct.c_uint64),
     ]
 
 
@@ -28,9 +35,10 @@ class FrameInfo(ct.Structure):
 
 
 class WriterOptions(ct.Structure):
-    _fields_ = [(name, ct.c_uint32) for name in (
-        "width", "height", "channels", "bit_depth", "packed10", "frame_count"
-    )] + [("first_frame", ct.c_int32), ("cfa", ct.c_uint32), ("frame_rate", ct.c_double)]
+    _fields_ = [
+        (name, ct.c_uint32)
+        for name in ("width", "height", "channels", "bit_depth", "packed10", "frame_count")
+    ] + [("first_frame", ct.c_int32), ("cfa", ct.c_uint32), ("frame_rate", ct.c_double)]
 
 
 def _path(path) -> bytes:
@@ -39,15 +47,19 @@ def _path(path) -> bytes:
 
 @lru_cache(maxsize=1)
 def library() -> ct.CDLL:
-    name = "cine_core.dll" if sys.platform == "win32" else (
-        "libcine_core.dylib" if sys.platform == "darwin" else "libcine_core.so"
+    name = (
+        "cine_core.dll"
+        if sys.platform == "win32"
+        else ("libcine_core.dylib" if sys.platform == "darwin" else "libcine_core.so")
     )
     override = os.environ.get("CINE_READER_LIBRARY")
     source = Path(__file__).resolve()
     candidates = [Path(override)] if override else [source.parent / "libs" / name]
     # Source checkouts can use cargo output without copying binaries into source.
     if not override and (source.parents[3] / "rust/cine-core/Cargo.toml").is_file():
-        candidates.extend(source.parents[3] / "target" / mode / name for mode in ("release", "debug"))
+        candidates.extend(
+            source.parents[3] / "target" / mode / name for mode in ("release", "debug")
+        )
     failures = []
     for path in candidates:
         if not path.is_file():
@@ -61,12 +73,15 @@ def library() -> ct.CDLL:
         detail = "; ".join(failures)
         raise ImportError(
             "The Rust CINE backend is missing or incompatible with this processor. "
-            "Install a wheel for this platform or run scripts/build_native.py in a source checkout. " + detail
+            "Install a wheel for this platform or run scripts/build_native.py in a source checkout. "
+            + detail
         )
     p, z, u, i, b = ct.c_void_p, ct.c_size_t, ct.c_uint32, ct.c_int32, ct.c_char_p
     signatures = {
-        "cine_abi_version": (u, []), "cine_last_error": (b, []),
-        "cine_reader_open": (p, [b]), "cine_reader_close": (None, [p]),
+        "cine_abi_version": (u, []),
+        "cine_last_error": (b, []),
+        "cine_reader_open": (p, [b]),
+        "cine_reader_close": (None, [p]),
         "cine_reader_info": (i, [p, ct.POINTER(CineInfo)]),
         "cine_reader_offset": (i, [p, u, ct.POINTER(ct.c_uint64)]),
         "cine_reader_block": (i, [p, u, p, z, ct.POINTER(z)]),
@@ -77,7 +92,8 @@ def library() -> ct.CDLL:
         "cine_unpack10": (i, [p, z, p, z]),
         "cine_writer_create": (p, [b, ct.POINTER(WriterOptions)]),
         "cine_writer_write": (i, [p, p, z]),
-        "cine_writer_write_image": (i, [p, p, z, u, u]), "cine_writer_finish": (i, [p]),
+        "cine_writer_write_image": (i, [p, p, z, u, u]),
+        "cine_writer_finish": (i, [p]),
         "cine_writer_close": (None, [p]),
         "cine_process": (i, [p, p, u, u, u, u, u, u, ct.c_double]),
         "cine_stats_create": (p, [z, u, u, ct.c_double, ct.c_double, u]),
@@ -102,6 +118,7 @@ def check(status: int, lib=None) -> None:
 
 class NativeReader(io.RawIOBase):
     """Own the Rust handle and expose legacy file-like metadata access."""
+
     def __init__(self, filename):
         super().__init__()
         self.lib = library()
@@ -121,10 +138,17 @@ class NativeReader(io.RawIOBase):
         with self._lock:
             self._require_open()
             length = ct.c_size_t()
-            check(self.lib.cine_reader_block(self._handle, kind, None, 0, ct.byref(length)), self.lib)
+            check(
+                self.lib.cine_reader_block(self._handle, kind, None, 0, ct.byref(length)), self.lib
+            )
             output = ct.create_string_buffer(length.value)
-            check(self.lib.cine_reader_block(self._handle, kind, output, length.value, ct.byref(length)), self.lib)
-            return output.raw[:length.value]
+            check(
+                self.lib.cine_reader_block(
+                    self._handle, kind, output, length.value, ct.byref(length)
+                ),
+                self.lib,
+            )
+            return output.raw[: length.value]
 
     def offset(self, index: int) -> int:
         if index < 0 or index > self.info.frame_count:
@@ -145,8 +169,12 @@ class NativeReader(io.RawIOBase):
         details = FrameInfo()
         with self._lock:
             self._require_open()
-            check(self.lib.cine_reader_read_frame(self._handle, index, flags,
-                                                frame.ctypes.data, frame.nbytes, ct.byref(details)), self.lib)
+            check(
+                self.lib.cine_reader_read_frame(
+                    self._handle, index, flags, frame.ctypes.data, frame.nbytes, ct.byref(details)
+                ),
+                self.lib,
+            )
             annotation = self.block(3) if annotations else b""
         return frame, details, annotation
 
@@ -161,14 +189,24 @@ class NativeReader(io.RawIOBase):
             available = max(0, self.info.file_size - self._position)
             size = available if size is None or size < 0 else min(int(size), available)
             output = ct.create_string_buffer(size)
-            check(self.lib.cine_reader_read_at(self._handle, self._position, output, size), self.lib)
+            check(
+                self.lib.cine_reader_read_at(self._handle, self._position, output, size), self.lib
+            )
             self._position += size
             return output.raw
 
     def seek(self, offset: int, whence: int = 0) -> int:
         with self._lock:
             self._require_open()
-            base = 0 if whence == 0 else self._position if whence == 1 else self.info.file_size if whence == 2 else None
+            base = (
+                0
+                if whence == 0
+                else self._position
+                if whence == 1
+                else self.info.file_size
+                if whence == 2
+                else None
+            )
             if base is None or base + offset < 0:
                 raise ValueError("Invalid seek")
             self._position = int(base + offset)
@@ -211,8 +249,16 @@ class NativeWriter:
         with self._lock:
             if not self._handle:
                 raise RuntimeError("CINE writer is closed")
-            check(self.lib.cine_writer_write_image(self._handle, frame.ctypes.data, frame.nbytes,
-                                                  frame.dtype.itemsize, frame.shape[2] if frame.ndim == 3 else 1), self.lib)
+            check(
+                self.lib.cine_writer_write_image(
+                    self._handle,
+                    frame.ctypes.data,
+                    frame.nbytes,
+                    frame.dtype.itemsize,
+                    frame.shape[2] if frame.ndim == 3 else 1,
+                ),
+                self.lib,
+            )
 
     def finish(self):
         with self._lock:

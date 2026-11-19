@@ -1,4 +1,5 @@
 """Independent CINE container/pixel verification through FFmpeg when installed."""
+
 from __future__ import annotations
 
 import shutil
@@ -10,31 +11,49 @@ import pytest
 from cine_reader import write_cine
 from cine_reader._lookup import LOOKUP_TABLE
 
-
 FFMPEG = shutil.which("ffmpeg")
 pytestmark = pytest.mark.skipif(FFMPEG is None, reason="FFmpeg is not installed")
 
 
 def decode_with_ffmpeg(path, pixel_format):
     completed = subprocess.run(
-        [FFMPEG, "-v", "error", "-i", str(path), "-vsync", "0", "-f", "rawvideo",
-         "-pix_fmt", pixel_format, "pipe:1"],
-        check=True, capture_output=True,
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-vsync",
+            "0",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            pixel_format,
+            "pipe:1",
+        ],
+        check=True,
+        capture_output=True,
     )
     return completed.stdout
 
 
 @pytest.mark.parametrize("width", [5, 64])
-@pytest.mark.parametrize("dtype,channels,pixel_format", [
-    (np.uint8, 1, "gray"),
-    (np.uint16, 1, "gray16le"),
-    (np.uint8, 3, "rgb24"),
-    (np.uint16, 3, "rgb48le"),
-])
+@pytest.mark.parametrize(
+    "dtype,channels,pixel_format",
+    [
+        (np.uint8, 1, "gray"),
+        (np.uint16, 1, "gray16le"),
+        (np.uint8, 3, "rgb24"),
+        (np.uint16, 3, "rgb48le"),
+    ],
+)
 def test_ffmpeg_recovers_normal_pixels_exactly(tmp_path, width, dtype, channels, pixel_format):
     shape = (3, 4, width) + ((3,) if channels == 3 else ())
     frames = np.random.default_rng(431).integers(
-        0, np.iinfo(dtype).max + 1, size=shape, dtype=dtype,
+        0,
+        np.iinfo(dtype).max + 1,
+        size=shape,
+        dtype=dtype,
     )
     path = tmp_path / "normal.cine"
     write_cine(path, frames, first_frame=-1, frame_rate=30)

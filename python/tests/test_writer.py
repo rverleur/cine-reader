@@ -1,4 +1,5 @@
 """Round trips exercise the public API through the shared Rust ABI."""
+
 from __future__ import annotations
 
 import shutil
@@ -11,7 +12,9 @@ from cine_reader import Cine, CineWriter, write_cine, write_cine_from_images, wr
 from cine_reader._lookup import LOOKUP_TABLE
 
 
-@pytest.mark.parametrize("dtype,channels", [(np.uint8, 1), (np.uint16, 1), (np.uint8, 3), (np.uint16, 3)])
+@pytest.mark.parametrize(
+    "dtype,channels", [(np.uint8, 1), (np.uint16, 1), (np.uint8, 3), (np.uint16, 3)]
+)
 def test_normal_roundtrip_padding_orientation_and_rgb(tmp_path, dtype, channels):
     shape = (3, 5) + (() if channels == 1 else (3,))
     frames = np.arange(3 * np.prod(shape), dtype=dtype).reshape((3,) + shape)
@@ -121,8 +124,21 @@ def test_image_files_and_video_stream(tmp_path):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         pytest.skip("FFmpeg/FFprobe unavailable")
     video = tmp_path / "video.mkv"
-    subprocess.run(["ffmpeg", "-v", "error", "-framerate", "7", "-i", str(tmp_path / "frame%d.png"),
-                    "-c:v", "ffv1", str(video)], check=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-framerate",
+            "7",
+            "-i",
+            str(tmp_path / "frame%d.png"),
+            "-c:v",
+            "ffv1",
+            str(video),
+        ],
+        check=True,
+    )
     output = write_cine_from_video(tmp_path / "video.cine", video)
     with Cine(output, canonical=True) as cine:
         assert cine.total_frames == 3

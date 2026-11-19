@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+
 from cine_reader import Cine
 
-import matplotlib.pyplot as plt
 
 def main() -> None:
     cine_path = Path(__file__).resolve().parents[2] / "sample_data" / "TrimmedCine.cine"
@@ -16,7 +17,9 @@ def main() -> None:
 
     print(f"Frames: {cine.total_frames} ({first}..{last})")
     print(f"Resolution: {cine.image_header.biWidth} x {abs(cine.image_header.biHeight)}")
-    print(f"Bit depth: biBitCount={cine.image_header.biBitCount}, RealBPP={cine.camera_setup.RealBPP}")
+    print(
+        f"Bit depth: biBitCount={cine.image_header.biBitCount}, RealBPP={cine.camera_setup.RealBPP}"
+    )
     print(f"Frame rate: {cine.frame_rate:.6f} Hz")
     print(f"Exposure time: {cine.exposure_time_seconds:.9f} s")
     print(f"Recording date: {cine.recording_date}")
@@ -35,6 +38,7 @@ def main() -> None:
     plt.show()
 
     cine.close_file()
+
 
 if __name__ == "__main__":
     main()

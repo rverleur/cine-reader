@@ -1,4 +1,5 @@
 """Opt-in exact comparisons against the pre-refactor reader's camera corpus."""
+
 from __future__ import annotations
 
 import hashlib
@@ -14,7 +15,9 @@ REFERENCE = json.loads((Path(__file__).parent / "data/corpus_reference.json").re
 CORPUS = os.environ.get("CINE_TEST_CORPUS")
 
 
-@pytest.mark.skipif(not CORPUS, reason="Set CINE_TEST_CORPUS to the external sample_cines directory")
+@pytest.mark.skipif(
+    not CORPUS, reason="Set CINE_TEST_CORPUS to the external sample_cines directory"
+)
 @pytest.mark.parametrize("reference", REFERENCE, ids=lambda record: record["name"])
 def test_camera_frames_match_archived_reader(reference):
     path = Path(CORPUS) / reference["name"]

@@ -21,6 +21,9 @@ sample!(u8, u16, f32, f64);
 /// Repair (1), same-phase Bayer repair (2), or bilinear demosaic (3).
 /// Demosaic patterns are RGGB/BGGR/GRBG/GBRG at param 0/1/2/3.
 /// Param bit 256 selects MATLAB's ties-away rounding instead of ties-even.
+// Keep the established public Rust interface aligned with the C ABI: separate
+// dimensions and operation parameters let bindings pass scalar arguments directly.
+#[allow(clippy::too_many_arguments)]
 pub fn process<T: Sample>(
     source: &[T],
     output: &mut [T],

@@ -1,16 +1,17 @@
 """Build the dependency-free Rust shared library into platform-specific wheels."""
+
 from __future__ import annotations
 
 import os
 import platform
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from setuptools import Distribution, setup
-from setuptools.command.build_py import build_py
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py
 from wheel.bdist_wheel import bdist_wheel
 
 ROOT = Path(__file__).resolve().parent
@@ -23,17 +24,29 @@ def build_rust(destination: Path) -> None:
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", str(ROOT / "target"))).resolve()
     target = os.environ.get("CARGO_BUILD_TARGET")
     if target:
-        machine = {"arm64": "aarch64", "AMD64": "x86_64"}.get(platform.machine(), platform.machine())
-        system = "windows" if sys.platform == "win32" else "apple" if sys.platform == "darwin" else "linux"
+        machine = {"arm64": "aarch64", "AMD64": "x86_64"}.get(
+            platform.machine(), platform.machine()
+        )
+        system = (
+            "windows"
+            if sys.platform == "win32"
+            else "apple"
+            if sys.platform == "darwin"
+            else "linux"
+        )
         if not target.startswith(machine + "-") or system not in target:
-            raise RuntimeError("Build Python wheels natively on their target OS/CPU; use scripts/build_native.py for cross-built libraries")
+            raise RuntimeError(
+                "Build Python wheels natively on their target OS/CPU; use scripts/build_native.py for cross-built libraries"
+            )
     command = ["cargo", "build", "--release", "--locked", "--manifest-path", str(manifest)]
     environment = dict(os.environ, CARGO_TARGET_DIR=str(target_dir))
     subprocess.run(command, cwd=ROOT, env=environment, check=True)
     target = os.environ.get("CARGO_BUILD_TARGET")
     output = target_dir / target / "release" if target else target_dir / "release"
-    library = "cine_core.dll" if sys.platform == "win32" else (
-        "libcine_core.dylib" if sys.platform == "darwin" else "libcine_core.so"
+    library = (
+        "cine_core.dll"
+        if sys.platform == "win32"
+        else ("libcine_core.dylib" if sys.platform == "darwin" else "libcine_core.so")
     )
     destination.mkdir(parents=True, exist_ok=True)
     for pattern in ("*.dll", "*.dylib", "*.so"):
@@ -50,8 +63,10 @@ class RustBuildPy(build_py):
 
 class RustBuildExt(build_ext):
     def run(self):
-        destination = ROOT / "python" / "src" / "cine_reader" / "libs" if self.inplace else (
-            Path(self.build_lib) / "cine_reader" / "libs"
+        destination = (
+            ROOT / "python" / "src" / "cine_reader" / "libs"
+            if self.inplace
+            else (Path(self.build_lib) / "cine_reader" / "libs")
         )
         build_rust(destination)
 
