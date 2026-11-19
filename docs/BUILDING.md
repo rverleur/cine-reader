@@ -83,6 +83,45 @@ been migrated to a platform wheel matrix; do not publish this refactor using tha
 workflow until the separately planned GitHub/PyPI release work is complete.
 The project version is intentionally unchanged for that later release decision.
 
+### Linux native build
+
+After installing stable Rust and your distribution's C linker/compiler and Python:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install numpy pytest setuptools wheel build
+cargo build --release --workspace --locked
+.venv/bin/python scripts/build_native.py
+.venv/bin/python -m pip install --no-build-isolation -e .
+.venv/bin/python -m pytest python/tests -q
+.venv/bin/python -m build --no-isolation
+```
+
+The shared library is `target/release/libcine_core.so`; the standalone executable
+is `target/release/cine-tool`. Use a manylinux/musllinux build environment when
+preparing redistributable wheels later. This local build does not certify
+compatibility with older Linux distributions.
+
+### Windows native build
+
+Use the MSVC Rust toolchain, Visual Studio C++ Build Tools and Python matching the
+intended architecture. For an x64 Developer PowerShell, after installing them:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install numpy pytest setuptools wheel build
+cargo build --release --workspace --locked
+.\.venv\Scripts\python.exe scripts\build_native.py
+.\.venv\Scripts\python.exe -m pip install --no-build-isolation -e .
+.\.venv\Scripts\python.exe -m pytest python\tests -q
+.\.venv\Scripts\python.exe -m build --no-isolation
+```
+
+The shared library is `target\release\cine_core.dll`; the standalone executable
+is `target\release\cine-tool.exe`. Build ARM64 separately with ARM64 Python and
+the corresponding Rust/MSVC toolchain. Run MATLAB's build on the same platform;
+copying a macOS MEX or dylib to Windows/Linux cannot work.
+
 ## MATLAB
 
 Run `Matlab/build_cine_backend.m` in MATLAB after configuring `mex -setup C`.

@@ -27,6 +27,8 @@ include Cargo.toml
 include Cargo.lock
 graft scripts
 include docs/BUILDING.md
+include docs/VALIDATION.md
+include rust/cine-core/README.md
 
 # Source archives contain source only; wheels build their own matching library.
 recursive-exclude python/src/cine_reader/libs *
