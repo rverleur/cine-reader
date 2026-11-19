@@ -1,10 +1,11 @@
 //! A dependency-free, streaming Phantom CINE reader and writer.
 //!
-//! The Rust API works without Python or MATLAB. See [`Reader`].
+//! The Rust API works without Python or MATLAB. See [`Reader`] and [`writer`].
 use std::fmt;
 
 pub mod lookup;
 pub mod reader;
+pub mod writer;
 pub use reader::{decode, FrameInfo, Info, Metadata, Reader};
 
 #[derive(Debug)]
