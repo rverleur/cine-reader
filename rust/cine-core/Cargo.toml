@@ -1,0 +1,12 @@
+[package]
+name = "cine-core"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.77"
+description = "Portable streaming Phantom CINE reader and writer"
+license = "MIT"
+
+[lib]
+name = "cine_core"
+crate-type = ["rlib", "cdylib", "staticlib"]
+

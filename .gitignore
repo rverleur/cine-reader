@@ -11,6 +11,11 @@ build/
 dist/
 .venv/
 .pytest_cache/
+target/
+*.rs.bk
+python/src/cine_reader/libs/libcine_core.*
+python/src/cine_reader/libs/cine_core.dll
+Matlab/private/lib/
 
 # MATLAB build artifacts
 *.mex*
