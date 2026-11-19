@@ -42,9 +42,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 _ => return Err("encoding must be normal or packed10".into()),
             };
             let info = r.info;
-            if packed10 && info.sample_bytes != 2 {
-                return Err("packed10 requires 12-bit linear u16 input; use the image/video frontend to rescale 8-bit media".into());
-            }
             let rate = r.metadata().frame_rate;
             let bit_depth = if packed10 || info.compression == 256 || info.compression == 1024 {
                 12
@@ -56,19 +53,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = WriterOptions {
                 width: info.width,
                 height: info.height.unsigned_abs(),
-                channels: info.channels,
+                channels: if packed10 { 1 } else { info.channels },
                 bit_depth,
                 packed10,
                 frame_count: info.frame_count,
                 first_frame: info.first_frame,
                 frame_rate: if rate > 0.0 { rate } else { 30.0 },
-                cfa: if info.channels == 1 { info.cfa } else { 0 },
+                cfa: if info.channels == 1 {
+                    info.cfa
+                } else if packed10 {
+                    4
+                } else {
+                    0
+                },
             };
             let mut writer = CineWriter::create(&args[3], options)?;
             let mut frame = vec![0; info.decoded_bytes as usize];
             for i in 0..info.frame_count {
                 r.read_frame_into(i, 3, &mut frame)?;
-                writer.write_frame(&frame)?;
+                writer.write_image(&frame, info.sample_bytes, info.channels)?;
             }
             writer.finish()?;
         }

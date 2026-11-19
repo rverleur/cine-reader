@@ -9,7 +9,9 @@
 //! A known frame count enables a single sequential write. A zero count streams
 //! frames to a temporary file and copies them once at finalization, so arbitrary
 //! iterators never require a frame stack in memory. The target is published only
-//! after successful finalization and is never overwritten.
+//! after successful finalization and is never overwritten. Filesystems without
+//! hard links (for example ExFAT) use an exclusive-create copy fallback: the
+//! destination is visible during that last copy, and removed if copying fails.
 
 use crate::{Error, Result};
 use std::fs::{self, File, OpenOptions};
@@ -430,16 +432,25 @@ impl CineWriter {
                 let _ = fs::remove_file(&complete_path);
                 return Err(error);
             }
-            fs::remove_file(&self.temporary)?;
-            self.temporary = complete_path;
+            let old_temporary = std::mem::replace(&mut self.temporary, complete_path);
+            let _ = fs::remove_file(old_temporary);
         } else {
             file.sync_all()?;
             drop(file);
         }
         // A hard link is an atomic, no-clobber publication on the same filesystem.
         // Unlike exists()+rename(), it cannot overwrite a concurrently created file.
-        fs::hard_link(&self.temporary, &self.destination)?;
+        if let Err(error) = fs::hard_link(&self.temporary, &self.destination) {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(error.into());
+            }
+            // ExFAT/FAT and some network mounts have no hard-link support. The
+            // fallback retains no-clobber behavior, but is not an atomic publish.
+            publish_copy(&self.temporary, &self.destination)?;
+        }
         self.finished = true;
+        self.buffer = Vec::new();
+        self.conversion = Vec::new();
         // Publication has succeeded even if antivirus/indexing delays temp cleanup.
         let _ = fs::remove_file(&self.temporary);
         Ok(())
@@ -625,6 +636,27 @@ fn temporary_file(destination: &Path) -> Result<(PathBuf, File)> {
     Err(Error::format("could not create a unique temporary output"))
 }
 
+fn publish_copy(source: &Path, destination: &Path) -> Result<()> {
+    let mut input = File::open(source)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    let result = (|| -> Result<()> {
+        let expected = input.metadata()?.len();
+        if std::io::copy(&mut input, &mut output)? != expected {
+            return Err(Error::format("temporary output changed while publishing"));
+        }
+        output.sync_all()?;
+        Ok(())
+    })();
+    drop(output);
+    if result.is_err() {
+        let _ = fs::remove_file(destination);
+    }
+    result
+}
+
 /// Maps linear 12-bit samples to the closest Phantom P10 code.
 pub fn inverse_lut() -> &'static [u16; 4096] {
     INVERSE_LUT.get_or_init(|| {
@@ -654,4 +686,28 @@ fn set_f32(buffer: &mut [u8], offset: usize, value: f32) {
 }
 fn set_text(buffer: &mut [u8], offset: usize, value: &str) {
     buffer[offset..offset + value.len()].copy_from_slice(value.as_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_publication_fallback_preserves_content_and_never_overwrites() {
+        let destination = std::env::temp_dir().join(format!(
+            "cine-publish-{}-{}",
+            std::process::id(),
+            TEMP_SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        let (source, mut file) = temporary_file(&destination).unwrap();
+        file.write_all(b"complete CINE bytes").unwrap();
+        drop(file);
+        publish_copy(&source, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"complete CINE bytes");
+        fs::write(&source, b"must not replace").unwrap();
+        assert!(publish_copy(&source, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"complete CINE bytes");
+        fs::remove_file(source).unwrap();
+        fs::remove_file(destination).unwrap();
+    }
 }

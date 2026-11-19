@@ -3,7 +3,9 @@
 //! The Rust API works without Python or MATLAB. See [`Reader`] and [`writer`].
 use std::fmt;
 
+mod ffi;
 pub mod lookup;
+pub mod processing;
 pub mod reader;
 pub mod writer;
 pub use reader::{decode, FrameInfo, Info, Metadata, Reader};

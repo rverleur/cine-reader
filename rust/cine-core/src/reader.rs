@@ -65,7 +65,8 @@ pub struct Metadata {
     pub trigger_time: u64,
     pub frame_rate: f64,
     pub exposure_ns: u64,
-    pub recording_timezone_minutes: i32,
+    /// Seconds to subtract from UTC to obtain local recording time.
+    pub recording_timezone_seconds: i32,
     pub color_enabled: bool,
     pub black_level: i32,
     pub white_level: i32,
@@ -122,7 +123,7 @@ impl Reader {
             trigger_time: u64::from_le_bytes(self.header[36..44].try_into().unwrap()),
             frame_rate: rate,
             exposure_ns,
-            recording_timezone_minutes: get32(&self.setup, 804) as i32,
+            recording_timezone_seconds: get32(&self.setup, 804) as i32,
             color_enabled: get32(&self.setup, 788) != 0,
             black_level: get32(&self.setup, 5732) as i32,
             white_level: get32(&self.setup, 5736) as i32,
@@ -149,6 +150,11 @@ impl Reader {
         let spos = u32_at(&header, 28) as u64;
         let table = u32_at(&header, 32) as u64;
         let frame_count = u32_at(&header, 20);
+        if i64::from(i32_at(&header, 16)) + i64::from(frame_count) - 1 > i64::from(i32::MAX) {
+            return Err(Error::format(
+                "frame numbers exceed the signed 32-bit CINE range",
+            ));
+        }
         let table_end = table + u64::from(frame_count) * offset_bytes as u64;
         if bpos < u16_at(&header, 2) as u64
             || spos < bpos + 40
@@ -314,6 +320,11 @@ impl Reader {
                 self.info.bit_count,
                 self.info.compression,
             )?;
+            if self.scratch.len() < frame.image_size as usize {
+                self.scratch
+                    .try_reserve_exact(frame.image_size as usize - self.scratch.len())
+                    .map_err(|_| Error::format("cannot allocate frame scratch buffer"))?;
+            }
             self.scratch.resize(frame.image_size as usize, 0);
             read(&mut self.file, pos, &mut self.scratch)?;
             decode(
@@ -331,7 +342,10 @@ impl Reader {
     }
     /// Return a canonical top-down RGB frame; u16 samples are little endian.
     pub fn read_frame(&mut self, index: u32) -> Result<Vec<u8>> {
-        let mut out = vec![0; self.info.decoded_bytes as usize];
+        let mut out = Vec::new();
+        out.try_reserve_exact(self.info.decoded_bytes as usize)
+            .map_err(|_| Error::format("cannot allocate frame output buffer"))?;
+        out.resize(self.info.decoded_bytes as usize, 0);
         self.read_frame_into(index, 3, &mut out)?;
         Ok(out)
     }
@@ -524,20 +538,22 @@ fn validate_payload(
     )?;
     let row = checked_size(width as u64 * channels * bytes)?;
     let h = height.unsigned_abs() as usize;
+    let tight = checked_size(row as u64 * h as u64)?;
+    checked_size(samples as u64 * bytes)?;
     match compression {
         0 => {
-            let stride = (row + 3) & !3;
-            if len != row * h && len != stride * h {
+            let padded = checked_size(((row as u64 + 3) & !3) * h as u64)?;
+            if len != tight && len != padded {
                 return Err(Error::format("normal frame payload size mismatch"));
             }
         }
         256 => {
-            if bit_count != 16 || len != samples.div_ceil(4) * 5 {
+            if bit_count != 16 || len != checked_size((samples as u64).div_ceil(4) * 5)? {
                 return Err(Error::format("packed10 frame payload size mismatch"));
             }
         }
         1024 => {
-            if bit_count != 16 || len != samples.div_ceil(2) * 3 {
+            if bit_count != 16 || len != checked_size((samples as u64).div_ceil(2) * 3)? {
                 return Err(Error::format("packed12 frame payload size mismatch"));
             }
         }
