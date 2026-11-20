@@ -19,7 +19,7 @@ Each target directory contains:
 | --- | --- |
 | `aarch64-apple-darwin` | Built and tested on the maintainer's Apple Silicon Mac |
 | `x86_64-apple-darwin` | Not yet collected or tested |
-| `x86_64-pc-windows-msvc` | Python library and standalone tool built/tested on Windows x64; MATLAB gateway not included |
+| `x86_64-pc-windows-msvc` | Python library, standalone tool and MATLAB R2026b gateway built/tested on Windows x64 |
 | `x86_64-unknown-linux-gnu` | Awaiting Linux build and tests |
 
 Other architectures require their own builds. Missing targets fail clearly at

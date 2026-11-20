@@ -137,8 +137,8 @@ independent checks above. **PCC itself was not available**, so opening/playback 
 PCC remains unverified, especially for dimensions unlike a Phantom camera sensor.
 No claim of vendor certification is made. Linux and Intel macOS binaries still
 require builds and runtime tests on those platforms. The Windows Python library
-and standalone tool have the native validation below; its MATLAB gateway remains
-unbuilt. Build guidance is in `docs/BUILDING.md`; a macOS ARM64 wheel and MATLAB
+and standalone tool have native validation below, together with the MATLAB
+R2026b gateway. Build guidance is in `docs/BUILDING.md`; a macOS ARM64 wheel and MATLAB
 MEX were built locally.
 
 ## Windows x64 validation
@@ -171,9 +171,16 @@ legacy smoke fixture; a separate selected corpus test passed for the transferred
   Package and DLL paths were verified inside each isolated environment. Rust,
   Git, C compilers, FFmpeg and FFprobe were unavailable to these consumer checks.
 
-MATLAB is not installed on the Windows test machine, so Windows MATLAB compilation
-and runtime tests were deliberately deferred. The collected Windows artifacts
-are the Rust DLL, standalone executable and checksummed build manifest.
+The MATLAB gateway was subsequently built with MATLAB R2026b Update 1 and the
+Visual Studio 2022 C compiler. Batch-mode tests over SSH passed the normal and
+packed10 round trips, lifecycle, processing, image-list and video-input checks.
+MATLAB also opened `visible_0_2500.cine`; its raw arrays for frames 0, 1250 and 2500
+exactly match the previously verified Python 16-bit PNG exports.
+
+The collected Windows artifacts now include `cine_mex.mexw64`, the Rust DLL,
+standalone executable and checksummed build manifest. The manifest records the
+MATLAB release, and the MATLAB companion DLL matches the collected Rust DLL
+byte-for-byte.
 
 The local commit gate now checks formatting, lint, compilation and tests for
 Python, Rust and MATLAB. The GitHub/PyPI publishing workflow and release version

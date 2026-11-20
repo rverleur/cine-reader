@@ -8,11 +8,16 @@
     "cine_core.dll": {
       "sha256": "3a22b653c74bbd3d246619a08ce80445660738d87108ade9288bc7254dc1d5d5",
       "size": 360448
+    },
+    "cine_mex.mexw64": {
+      "sha256": "f252f0bd4c8795ceec823507dd26bdda76fbe7af30e8fa888f5fc6610b109252",
+      "size": 28672
     }
   },
+  "matlab_release": "2026b",
   "rustc_version": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-pc-windows-msvc\nrelease: 1.100.0\nLLVM version: 23.1.5",
   "schema_version": 1,
-  "source_commit": "473c0504fed0b7d7e95bd398a74bbd5658eeb064",
+  "source_commit": "0ff7edf794c04a04a4cdb2a49447431329a94b31",
   "source_fingerprint": "3459d760d7d18c60d915c021b3633612523b85b100b0db99b39df499eab339fe",
   "target": "x86_64-pc-windows-msvc"
 }
