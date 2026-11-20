@@ -1,0 +1,24 @@
+{
+  "abi_version": 1,
+  "artifacts": {
+    "cine-tool": {
+      "sha256": "36ace53a69b886dec18527967093227102e8fceafad5ecfae79fdd7e9161f5cf",
+      "size": 533872
+    },
+    "cine_mex.mexmaca64": {
+      "sha256": "91151ff0fc8e291583219337d9932b2b8089d991f0a3b630c953569bf85ed7dc",
+      "size": 53344
+    },
+    "libcine_core.dylib": {
+      "sha256": "44a87aa0d645363da363fd9aa9159e9eb2140f78ae8d3a1a7a48f4f7ea79e3a8",
+      "size": 483408
+    }
+  },
+  "macos_deployment_target": "11.0",
+  "matlab_release": "2025b",
+  "rustc_version": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.6",
+  "schema_version": 1,
+  "source_commit": "a11ad3175c87c973f5b1578a14a0be6d904d4acf",
+  "source_fingerprint": "3459d760d7d18c60d915c021b3633612523b85b100b0db99b39df499eab339fe",
+  "target": "aarch64-apple-darwin"
+}
