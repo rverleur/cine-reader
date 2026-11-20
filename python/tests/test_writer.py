@@ -139,7 +139,7 @@ def test_image_files_and_video_stream(tmp_path):
         ],
         check=True,
     )
-    output = write_cine_from_video(tmp_path / "video.cine", video)
+    output = write_cine_from_video(tmp_path / "video.cine", video, backend="ffmpeg")
     with Cine(output, canonical=True) as cine:
         assert cine.total_frames == 3
         assert cine.frame_rate == pytest.approx(7)

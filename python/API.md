@@ -166,11 +166,14 @@ with CineWriter(
   data. Existing destinations are never overwritten. `abort()` discards a stream.
 - Image files require the optional `images` extra (Pillow). Supplied order is
   retained. Palette images become RGB; alpha channels are discarded.
-- Video input needs FFmpeg/FFprobe, selects the first video stream, and decodes
+- Video input uses the optional `video` extra (PyAV with bundled media libraries),
+  selects the first video stream, and decodes
   RGB8 (or `grayscale=True` gray8) one frame at a time. Stored pixel orientation
   is retained; video rotation metadata is not applied. Audio is ignored. The output
   has a constant frame rate; supply `frame_rate=` when converting variable-rate
-  input. The optional `ffmpeg=` and `ffprobe=` parameters select tool paths.
+  input. No external executable is needed by the default backend. Explicit
+  `backend="ffmpeg"`, or custom `ffmpeg=` / `ffprobe=` paths, selects the legacy
+  subprocess backend and requires those separately installed tools.
 
 Writer output follows the supplied CINE specification. An end-to-end PCC open
 check must be performed on a Windows system with PCC before claiming tested

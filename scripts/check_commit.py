@@ -202,7 +202,7 @@ def run(label: str, command: list[str], root: Path, environment: dict[str, str])
 
 
 def run_checks(root: Path) -> None:
-    for module in ("numpy", "pytest", "PIL", "ruff", "miss_hit", "miss_hit_core"):
+    for module in ("numpy", "pytest", "PIL", "av", "ruff", "miss_hit", "miss_hit_core"):
         if importlib.util.find_spec(module) is None:
             raise CheckFailure(
                 f"Missing Python tool {module}. Install the project with its [dev] dependencies."

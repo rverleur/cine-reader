@@ -37,11 +37,14 @@ Releases = "https://github.com/rverleur/cine-reader/releases"
 
 [project.optional-dependencies]
 images = ["Pillow>=9"]
+video = ["av>=12"]
+media = ["Pillow>=9", "av>=12"]
 dev = [
   "build>=1.2",
   "pytest>=8.0",
   "twine>=5.0",
   "Pillow>=9",
+  "av>=12",
   "ruff==0.17.6",
   "miss-hit==0.9.44",
 ]
@@ -67,5 +70,6 @@ cine_reader = [
   "libs/*.dll",
   "libs/*.so",
   "libs/*.dylib",
+  "libs/build-info.json",
   "py.typed",
 ]

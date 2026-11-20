@@ -213,16 +213,109 @@ def write_cine_from_video(
     frame_rate: float | None = None,
     ffmpeg: str = "ffmpeg",
     ffprobe: str = "ffprobe",
+    backend: str | None = None,
     **options,
 ) -> Path:
-    """Stream a video through FFmpeg into Rust without retaining a video stack.
+    """Stream a video through optional PyAV into Rust, retaining one frame at a time.
 
-    FFmpeg/FFprobe must be installed separately. Decoding uses RGB8 or gray8;
+    Install ``cine-handler[video]`` for video input without external executables.
+    ``backend='ffmpeg'`` uses separately installed FFmpeg/FFprobe instead; supplying
+    a custom ``ffmpeg`` or ``ffprobe`` path also selects that legacy backend unless
+    ``backend`` is explicitly set. Decoding uses RGB8 or gray8;
     packed10 scales this to 12-bit and RGB becomes a Bayer mosaic. The first
     video stream is selected, stored pixel orientation is retained (rotation metadata
     is not applied), audio is ignored, and timestamps are represented
     by a constant rate (override frame_rate when converting variable-rate video).
     """
+    if backend is None:
+        backend = "ffmpeg" if ffmpeg != "ffmpeg" or ffprobe != "ffprobe" else "pyav"
+    if backend not in ("pyav", "ffmpeg"):
+        raise ValueError("backend must be 'pyav' or 'ffmpeg'")
+    if frame_rate is not None:
+        frame_rate = float(frame_rate)
+        if not np.isfinite(frame_rate) or frame_rate <= 0:
+            raise ValueError("frame_rate must be finite and positive")
+    if backend == "pyav":
+        return _write_cine_from_pyav(
+            filename,
+            video_filename,
+            encoding=encoding,
+            grayscale=grayscale,
+            frame_rate=frame_rate,
+            **options,
+        )
+    return _write_cine_from_ffmpeg(
+        filename,
+        video_filename,
+        encoding=encoding,
+        grayscale=grayscale,
+        frame_rate=frame_rate,
+        ffmpeg=ffmpeg,
+        ffprobe=ffprobe,
+        **options,
+    )
+
+
+def _write_cine_from_pyav(
+    filename: str | Path,
+    video_filename: str | Path,
+    *,
+    encoding: str,
+    grayscale: bool,
+    frame_rate: float | None,
+    **options,
+) -> Path:
+    try:
+        import av
+    except ImportError as exc:
+        raise ImportError("Install video support with: pip install 'cine-handler[video]'") from exc
+
+    with av.open(str(video_filename), mode="r") as container:
+        if not container.streams.video:
+            raise ValueError("Input contains no video stream")
+        stream = container.streams.video[0]
+        if frame_rate is None:
+            for candidate in (stream.average_rate, stream.base_rate, stream.guessed_rate):
+                if candidate is not None:
+                    rate = float(candidate)
+                    if np.isfinite(rate) and rate > 0:
+                        frame_rate = rate
+                        break
+            if frame_rate is None:
+                raise ValueError("Video frame rate is unknown; specify frame_rate")
+        width, height = stream.codec_context.width, stream.codec_context.height
+        if width <= 0 or height <= 0:
+            raise ValueError("Video width and height must be positive")
+        with CineWriter(
+            filename,
+            width=width,
+            height=height,
+            channels=1 if grayscale else 3,
+            dtype=np.uint8,
+            encoding=encoding,
+            frame_rate=frame_rate,
+            **options,
+        ) as writer:
+            for frame in container.decode(stream):
+                if frame.width != width or frame.height != height:
+                    raise ValueError("Video frame dimensions changed during decoding")
+                writer.write_frame(frame.to_ndarray(format="gray" if grayscale else "rgb24"))
+            if writer.frames_written == 0:
+                raise ValueError("Video contains no decoded frames")
+    return Path(filename)
+
+
+def _write_cine_from_ffmpeg(
+    filename: str | Path,
+    video_filename: str | Path,
+    *,
+    encoding: str,
+    grayscale: bool,
+    frame_rate: float | None,
+    ffmpeg: str,
+    ffprobe: str,
+    **options,
+) -> Path:
     for executable in (ffmpeg, ffprobe):
         if not shutil.which(executable):
             raise FileNotFoundError(f"Required video tool was not found: {executable}")
