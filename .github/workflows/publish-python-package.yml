@@ -71,13 +71,13 @@ jobs:
         run: python scripts/release_install_check.py
       - name: Upload validation logs
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: install-checks-${{ matrix.target }}
           path: dist/release-checks/
           if-no-files-found: ignore
       - name: Upload verified distributions
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: distributions-${{ matrix.target }}
           path: dist/release/*
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           pattern: distributions-*
           merge-multiple: true
@@ -107,7 +107,7 @@ jobs:
           python -m pip install --only-binary=:all: packaging "twine>=5"
           python scripts/release.py
           python -m twine check dist/release/*
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: python-package-distributions
           path: dist/release/*
@@ -124,7 +124,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: python-package-distributions
           path: dist/
@@ -139,7 +139,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: python-package-distributions
           path: dist/

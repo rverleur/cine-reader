@@ -27,6 +27,7 @@ or stale binaries produce an error; the installer never compiles or downloads.
 Run it again after updating the checkout, with all `Cine`/`CineWriter` objects
 closed or deleted. Add the `Matlab` folder to your project path each session
 (or use MATLAB's **Set Path** dialog); do not add `private/` directly.
+Linux also uses the OS-provided `/usr/bin/readlink` to resolve installed library paths.
 
 On Linux, MATLAB can retain the Rust library after a backend error even when
 all objects are closed. Reinstalling identical binaries is safe in the same

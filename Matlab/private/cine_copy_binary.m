@@ -4,18 +4,13 @@ function cine_copy_binary(source, destination)
         copyfile(source, destination);
         return
     end
-    % fileattrib resolves symlinks on older MATLAB releases too; the newer
-    % permission APIs do not provide this canonical path for loader matching.
-    if isfile(destination)
-        [status, attributes] = fileattrib(destination); %#ok<FILEATTRIB>
-        assert(status, 'cine:install', 'Cannot inspect installed binary: %s.', destination);
-        path = attributes.Name;
-    else
-        [parent, name, extension] = fileparts(destination);
-        [status, attributes] = fileattrib(parent); %#ok<FILEATTRIB>
-        assert(status, 'cine:install', 'Cannot inspect binary directory: %s.', parent);
-        path = fullfile(attributes.Name, [name extension]);
-    end
+    % Resolve symlinks even when the destination was removed. Use the Linux OS
+    % utility to avoid release-dependent MATLAB fileattrib diagnostics.
+    literal = ['''', strrep(destination, '''', '''"''"'''), ''''];
+    [status, path] = system(['/usr/bin/readlink -f -- ' literal]);
+    assert(status == 0 && numel(path) > 1 && path(end) == newline, ...
+           'cine:install', 'Cannot resolve installed binary path: %s.', destination);
+    path = path(1:end - 1); % Remove only the utility's newline, preserving filename whitespace.
     path = strrep(path, newline, '\012');
     mappings = splitlines(fileread('/proc/self/maps'));
     mapped = any(endsWith(mappings, [' ' path]) | endsWith(mappings, [' ' path ' (deleted)']));

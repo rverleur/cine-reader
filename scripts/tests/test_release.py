@@ -8,7 +8,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import shutil
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -110,6 +112,31 @@ def test_release_version_and_tag_must_agree():
         release.validate_tag(PROJECT, "v999.0.0")
 
 
+def test_windows_git_checkout_preserves_license_bytes(tmp_path, monkeypatch):
+    # Assembly verifies a Windows-built wheel against a Linux checkout. Git must
+    # not introduce CRLF into the license on the Windows packaging runner.
+    for name in tuple(os.environ):
+        if name.startswith("GIT_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    root = tmp_path / "windows checkout"
+    root.mkdir()
+    expected = (PROJECT / "LICENSE").read_bytes().replace(b"\r\n", b"\n")
+    (root / "LICENSE").write_bytes(expected)
+    shutil.copyfile(PROJECT / ".gitattributes", root / ".gitattributes")
+
+    def git(*arguments):
+        subprocess.run(["git", "-C", str(root), *arguments], capture_output=True, check=True)
+
+    git("init", "--quiet")
+    git("config", "core.autocrlf", "true")
+    git("add", ".gitattributes", "LICENSE")
+    (root / "LICENSE").unlink()
+    git("checkout-index", "--force", "--all")
+    assert (root / "LICENSE").read_bytes() == expected
+
+
 def test_complete_collection_passes(checkout):
     assert set(release.validate_collection(checkout)) == set(release.TARGET_TAGS)
 
@@ -184,9 +211,11 @@ def test_complete_distribution_set_preserves_all_targets(checkout, tmp_path):
         release.verify_distribution_set(checkout, output)
 
 
-@pytest.mark.parametrize("damage", ["missing-matlab", "recording", "local-library", "rust-source"])
+@pytest.mark.parametrize(
+    "damage", ["missing-matlab", "missing-attributes", "recording", "local-library", "rust-source"]
+)
 def test_sdist_rejects_missing_interfaces_and_stale_or_local_outputs(checkout, tmp_path, damage):
-    remove = "Matlab/Cine.m" if damage == "missing-matlab" else None
+    remove = {"missing-matlab": "Matlab/Cine.m", "missing-attributes": ".gitattributes"}.get(damage)
     extras = {
         "recording": {"sample_data/local.cine": b"private camera recording"},
         "local-library": {"Matlab/private/lib/local.so": b"uncollected binary"},

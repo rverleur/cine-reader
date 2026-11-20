@@ -1,5 +1,6 @@
 include LICENSE README.md PYPI.md CHANGELOG.md
 include pyproject.toml setup.py pytest.ini miss_hit.cfg
+include .gitattributes
 include Cargo.toml Cargo.lock .cargo/config.toml
 graft python/src
 graft python/examples
