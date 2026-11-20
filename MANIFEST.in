@@ -25,12 +25,15 @@ graft rust/cine-core/tests
 include rust/cine-core/Cargo.toml
 include Cargo.toml
 include Cargo.lock
+include .cargo/config.toml
 graft scripts
 include docs/BUILDING.md
 include docs/DEVELOPMENT.md
 include docs/VALIDATION.md
 include rust/cine-core/README.md
+graft binaries
 
-# Source archives contain source only; wheels build their own matching library.
+# Wheels select one verified backend; source archives retain all collected targets.
+# Exclude local build outputs, which have no validated artifact manifest.
 recursive-exclude python/src/cine_reader/libs *
 global-exclude *.py[cod]

@@ -31,6 +31,13 @@ rustup component add rustfmt clippy
 python scripts/install_hooks.py
 ```
 
+Normal installs select a verified binary from `binaries/` and never invoke Rust.
+To bootstrap development on a platform whose collected binary is not available
+or when changing Rust source, set `CINE_BUILD_RUST=1` for the installation command.
+In PowerShell use `$env:CINE_BUILD_RUST = '1'`, install, then
+`Remove-Item Env:CINE_BUILD_RUST`. On POSIX shells use
+`CINE_BUILD_RUST=1 python -m pip install -e '.[dev]'`.
+
 The installer sets **local** `core.hooksPath=.githooks` and records the Python and
 MATLAB executables for Git clients/IDEs. It does not change global Git settings,
 replace another hook manager, or install tools automatically during commits.
@@ -40,7 +47,7 @@ run the installer there too. Re-run it if the virtual environment moves.
 Required external tools are Rust/Cargo with rustfmt and Clippy, FFmpeg and FFprobe,
 and a licensed MATLAB installation with a configured C MEX compiler. Configure
 that compiler once with `mex -setup C` in MATLAB. Ruff and MISS_HIT versions are
-pinned in the `dev` extra; NumPy, pytest and Pillow are installed with it. Native
+pinned in the `dev` extra; NumPy, pytest, Pillow and PyAV are installed with it. Native
 MATLAB checks are required even when a commit only changes another language,
 because all three interfaces share a backend. A host without MATLAB cannot run
 this complete local gate; there is no silent success/skip mode.

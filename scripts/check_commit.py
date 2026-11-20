@@ -145,6 +145,7 @@ def prepare_environment(root: Path) -> dict[str, str]:
         "PYTEST_ADDOPTS",
         "PYTEST_PLUGINS",
         "CINE_READER_LIBRARY",
+        "CINE_BUILD_RUST",
     ):
         environment.pop(key, None)
     tools = {

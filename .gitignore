@@ -16,10 +16,13 @@ target/
 *.rs.bk
 python/src/cine_reader/libs/libcine_core.*
 python/src/cine_reader/libs/cine_core.dll
+python/src/cine_reader/libs/build-info.json
 Matlab/private/lib/
 
 # MATLAB build artifacts
 *.mex*
+# Finished, platform-specific libraries and adapters are collected for users.
+!/binaries/**/*.mex*
 
 # Local data
 *.tiff

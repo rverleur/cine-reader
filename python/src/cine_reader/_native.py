@@ -5,12 +5,13 @@ from __future__ import annotations
 import ctypes as ct
 import io
 import os
-import sys
 import threading
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+
+from ._binary import BinaryError, select_prebuilt, validate_library
 
 
 class CineInfo(ct.Structure):
@@ -47,35 +48,25 @@ def _path(path) -> bytes:
 
 @lru_cache(maxsize=1)
 def library() -> ct.CDLL:
-    name = (
-        "cine_core.dll"
-        if sys.platform == "win32"
-        else ("libcine_core.dylib" if sys.platform == "darwin" else "libcine_core.so")
-    )
     override = os.environ.get("CINE_READER_LIBRARY")
     source = Path(__file__).resolve()
-    candidates = [Path(override)] if override else [source.parent / "libs" / name]
-    # Source checkouts can use cargo output without copying binaries into source.
-    if not override and (source.parents[3] / "rust/cine-core/Cargo.toml").is_file():
-        candidates.extend(
-            source.parents[3] / "target" / mode / name for mode in ("release", "debug")
-        )
-    failures = []
-    for path in candidates:
-        if not path.is_file():
-            continue
+    try:
+        if override:
+            path = Path(override)  # Explicit maintainer/test override, still ABI-checked below.
+        elif (source.parents[3] / "rust/cine-core/Cargo.toml").is_file():
+            root = source.parents[3]
+            try:
+                path, _ = validate_library(source.parent / "libs", root)
+            except BinaryError:
+                path, _ = select_prebuilt(root)
+        else:
+            path, _ = validate_library(source.parent / "libs")
         try:
             lib = ct.CDLL(str(path))
-            break
         except OSError as exc:
-            failures.append(str(exc))
-    else:
-        detail = "; ".join(failures)
-        raise ImportError(
-            "The Rust CINE backend is missing or incompatible with this processor. "
-            "Install a wheel for this platform or run scripts/build_native.py in a source checkout. "
-            + detail
-        )
+            raise BinaryError(f"Cannot load the native CINE backend {path}: {exc}") from exc
+    except BinaryError as exc:
+        raise ImportError(str(exc)) from exc
     p, z, u, i, b = ct.c_void_p, ct.c_size_t, ct.c_uint32, ct.c_int32, ct.c_char_p
     signatures = {
         "cine_abi_version": (u, []),

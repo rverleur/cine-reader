@@ -4,15 +4,17 @@ Streaming Vision Research Phantom CINE reading and writing, with one portable
 Rust backend and compatible Python and MATLAB interfaces. The core has no
 third-party dependencies and requires no GPU or optional CPU instruction set.
 
-This is a **local, unreleased refactor**. Publishing workflows and the Python
+This is an **unreleased refactor**. Publishing workflows and the Python
 package version are unchanged for the later release work. See the
 [build instructions](docs/BUILDING.md) before installing this checkout.
 
 ## Python
 
-The distribution is `cine-handler`; the import remains `cine_reader`. A source
-installation needs Rust/Cargo and a linker. A matching platform wheel includes
-the backend and needs no Rust installation at runtime.
+The distribution is `cine-handler`; the import remains `cine_reader`. Matching
+wheels include the native backend. GitHub checkouts and source archives select
+a verified prebuilt backend from `binaries/`. Neither installation invokes Rust
+or a compiler. A backend must be available for the user's operating system and
+processor; see the [collected targets](binaries/README.md) for current coverage.
 
 ```sh
 python -m pip install -e .
@@ -59,8 +61,10 @@ Known frame counts write in a single pass. Unknown counts use a disk spool and
 one final copy, keeping memory independent of the number of frames. Existing
 destinations are never overwritten, and unsuccessful writes are discarded.
 Image decoding uses optional Pillow (`pip install '.[images]'`); video decoding
-uses separately installed FFmpeg/FFprobe. Neither is needed for arrays or CINE
-reading. See the [Python API](python/API.md).
+uses optional PyAV (`pip install '.[video]'`), whose wheels bundle the FFmpeg
+libraries. Install `.[media]` for both. These features need only Python packages;
+the standalone FFmpeg/FFprobe programs are used only by the optional explicit
+command-line backend and independent developer tests. See the [Python API](python/API.md).
 
 ## Encodings and orientation
 
@@ -122,8 +126,10 @@ image processing and statistics work independently of either binding. See
 
 See [BUILDING.md](docs/BUILDING.md) for macOS, Linux and Windows builds, wheel
 tagging, source installs and MATLAB relinking. Native macOS ARM64 binaries are
-built here; build other architectures on their corresponding platforms.
-Generated binaries stay local and are ignored by Git.
+built here; build other architectures on their corresponding platforms. Finished
+libraries and adapters are collected under tracked `binaries/<target>/` directories;
+compiler caches and temporary outputs remain ignored. See
+[binary collection and coverage](binaries/README.md).
 
 ```sh
 cargo test --workspace --locked

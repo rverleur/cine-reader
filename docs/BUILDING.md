@@ -1,143 +1,155 @@
-# Local Rust, Python and MATLAB builds
+# Python installation and maintainer builds
 
-The core is a dependency-free Rust crate. It uses ordinary CPU instructions,
-requires no GPU, and has no `target-cpu=native` setting. Python wheels contain the
-same C ABI library used by MATLAB. Build native binaries on each target OS and
-CPU architecture; a macOS ARM library cannot run on Intel macOS, Linux or Windows.
+The Rust backend is compiled by maintainers. Python users install a matching
+wheel, or a checkout/source archive containing a matching collected library.
+Normal installation and import never invoke Cargo, Rust, a C compiler, MATLAB,
+or a GPU. A missing or stale binary produces an actionable error instead of
+silently starting a source build.
 
-## Python source checkout (IDE use)
+## Python users
 
-Install stable Rust with Cargo and a platform C linker. On macOS install Xcode
-Command Line Tools (`xcode-select --install`). On Linux install the distribution's
-C compiler/linker toolchain. On Windows install Rust's MSVC toolchain and Visual
-Studio Build Tools with **Desktop development with C++**.
-
-From the repository root:
+For a published version with the required platform wheel:
 
 ```sh
-python -m venv .venv
-# Activate .venv with your OS's normal activation command.
-python -m pip install numpy pytest setuptools wheel build
-python scripts/build_native.py
-python -m pip install --no-build-isolation -e .
-python -m pytest python/tests -q
-cargo test --workspace --locked
+python -m pip install --only-binary=:all: cine-handler
 ```
 
-`scripts/build_native.py` has `RELEASE` and `TARGET` options in its `__main__`
-block for IDE execution. It copies the built library into the Python package.
+For a GitHub checkout or downloaded source archive containing your target in
+`binaries/`:
+
+```sh
+python -m pip install .
+# Alternatively, for an IDE working directly in the checkout:
+python -m pip install -e .
+```
+
+Optional image and video support also uses Python packages:
+
+```sh
+python -m pip install --only-binary=:all: 'cine-handler[media]'
+# In a checkout:
+python -m pip install -e '.[media]'
+```
+
+The `images` extra installs Pillow. The `video` extra installs PyAV, whose
+platform wheels include the FFmpeg libraries. `media` includes both. The default
+video reader streams frames through PyAV and needs no `ffmpeg` or `ffprobe`
+executable. Explicit `backend="ffmpeg"` or custom executable paths retain the
+optional subprocess backend for users who already manage those programs.
+
+OS, CPU architecture and system-library compatibility matter. See
+[collected targets](../binaries/README.md) for actual coverage; a macOS ARM64
+library cannot satisfy a Windows or Intel macOS installation. The current Python
+package version and publishing workflow still await the separate release work.
+Do not treat the existing PyPI version as the newly refactored release.
+
 If an older `cine-reader` distribution is installed in the same environment,
 uninstall it first (`python -m pip uninstall cine-reader`): it shares the
 `cine_reader` import name with `cine-handler`.
 
-An uninstalled checkout also searches `target/release` and `target/debug` when its
-library is not packaged. Set `PYTHONPATH=python/src` when testing that checkout
-without an editable install. A normal installation never compiles during import.
+## Maintainer prerequisites
 
-`CINE_READER_LIBRARY` can point at a specific backend library for development.
-It must match the current process architecture and ABI version. Each Python
-reader/writer serializes access to its native handle; independent handles can
-operate concurrently. The ctypes boundary releases the GIL during Rust calls.
+Building a new target or changing the Rust backend requires stable Rust/Cargo
+and a platform C linker. On macOS install Xcode Command Line Tools; on Debian
+install `build-essential`; on Windows install Visual Studio 2022 C++ Build Tools
+with Desktop development with C++, and use the native MSVC Rust toolchain.
+Match Python, Rust and the compiler environment to the intended architecture.
+Leave custom target CPU flags unset; the backend uses baseline CPU instructions.
+The checked-in Windows MSVC configuration statically links its C runtime so the
+Rust DLL does not require a separate Visual C++ redistributable installation.
+Verify Windows DLL dependencies and run the Python-only tests on Windows before
+claiming that target is validated.
 
-## Standalone Rust
+For all developer checks, also install FFmpeg/FFprobe for independent
+interoperability tests and licensed MATLAB with a supported C compiler for the
+MEX checks. Those tools are not Python runtime requirements.
+
+To bootstrap a development checkout without a collected backend, opt into a
+source build explicitly. POSIX example:
+
+```sh
+python3 -m venv .venv
+CINE_BUILD_RUST=1 .venv/bin/python -m pip install -e '.[dev]'
+```
+
+Windows Developer PowerShell:
+
+```powershell
+py -3.13 -m venv .venv
+$env:CINE_BUILD_RUST = '1'
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+Remove-Item Env:CINE_BUILD_RUST
+```
+
+The opt-in permits building the backend with an appropriate Rust toolchain.
+It is not required by ordinary users with a matching collected library or wheel.
+
+## Build and collect native binaries
 
 ```sh
 cargo build --workspace --release --locked
 cargo test --workspace --locked
+python scripts/build_native.py
+python -m pytest python/tests scripts/tests -q
 ```
 
-The crate exposes a normal Rust reader, writer and processing API, as well as
-`rlib`, static library and C-compatible shared-library outputs. See
-`rust/cine-core/include/cine_core.h` for the versioned C interface and buffer
-ownership rules. Cargo's generated Rust documentation is available with:
+Use the project virtual environment's Python for these commands. The helper
+copies the native release library into the Python checkout for development.
+`CINE_READER_LIBRARY` can select a development library explicitly; commit checks
+set it to the freshly built staged library. Independent reader/writer handles
+can operate concurrently, and ctypes releases the GIL during Rust calls.
+
+After committing source changes and validating the native build, run:
+
+```sh
+python scripts/collect_binaries.py
+```
+
+The collector builds fresh binaries and exports the shared library, standalone
+CLI, optional MATLAB gateway, and a checksummed manifest to
+`binaries/<Rust target>/`. See [binary collection](../binaries/README.md) for its
+IDE options, provenance and commit procedure. Runtime source checks compare a
+fingerprint of the Rust inputs, not the repository commit ID, so later
+Python-only or documentation commits do not invalidate an unchanged backend.
+
+The default MATLAB collection requires a configured C compiler (`mex -setup C`)
+and builds/tests `Matlab/build_cine_backend.m` on that platform. A macOS MEX
+cannot run on Windows or Linux. Collection can omit MATLAB for a Python-only
+artifact; all-language developer commit checks still require MATLAB.
+
+## Wheels and source archives
+
+With current collected artifacts:
+
+```sh
+python -m build
+python -m twine check dist/*
+```
+
+Normal builds copy a validated prebuilt library without invoking Rust. Set
+`CINE_BUILD_RUST=1` only when deliberately building a new backend. Wheels contain
+one library and its manifest, tagged `py3-none-<platform>` because ctypes does not
+require a specific CPython extension ABI. Source archives include the Rust
+sources and collected native libraries, allowing Python-only installation on
+the included compatible targets. They do not include compiler caches.
+
+On macOS the library's recorded deployment target determines the wheel's OS
+floor. On Linux a local Debian build is not automatically portable to older
+distributions: its manifest records a conservative libc requirement. Build and
+audit manylinux/musllinux wheels in the corresponding containers before broad
+Linux distribution. Do not rename a wheel to claim another platform or libc.
+
+The existing release workflow has not been migrated to a native wheel matrix.
+Do not publish this refactor through that workflow until the separately planned
+GitHub/PyPI release work is complete.
+
+## Standalone Rust
+
+The crate exposes reader, writer and processing APIs, a CLI, and `rlib`, static
+library and C-compatible shared-library outputs. Python is not required for
+Rust API or CLI use. See `rust/cine-core/include/cine_core.h` for the C ABI and
+buffer ownership rules, or generate Rust API documentation:
 
 ```sh
 cargo doc --workspace --no-deps --open
 ```
-
-## Platform wheels and source distributions
-
-```sh
-python -m build --no-isolation
-```
-
-A wheel is tagged `py3-none-<platform>`: the ctypes ABI is independent of Python's
-extension ABI, but the Rust binary is specific to the operating system and CPU.
-The source distribution includes the Cargo workspace, lockfile and Rust sources.
-Installing it requires Rust, Cargo and a linker. Installing a matching wheel does
-not. No network access is needed by Cargo because the core has no dependencies.
-
-On macOS, set `MACOSX_DEPLOYMENT_TARGET=11.0` before building to target macOS 11
-or later. Build separately on Apple Silicon and Intel hardware, or install the
-other Rust target and use its linker SDK. A cross-built library alone is not a
-correctly tagged cross-platform wheel. Do not rename wheels to claim another
-platform. On Linux, build manylinux/musllinux wheels in the corresponding build
-containers and audit their native dependencies before publishing. A local
-`linux_x86_64` wheel is appropriate for local installation, not a portable PyPI
-Linux release. On Windows build from an x64 or ARM64 developer environment matching
-Python and the Rust target. For example, native x64 builds use
-`x86_64-pc-windows-msvc`.
-
-These commands only build local artifacts. The existing release workflow has not
-been migrated to a platform wheel matrix; do not publish this refactor using that
-workflow until the separately planned GitHub/PyPI release work is complete.
-The project version is intentionally unchanged for that later release decision.
-
-### Linux native build
-
-After installing stable Rust and your distribution's C linker/compiler and Python:
-
-```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install numpy pytest setuptools wheel build
-cargo build --release --workspace --locked
-.venv/bin/python scripts/build_native.py
-.venv/bin/python -m pip install --no-build-isolation -e .
-.venv/bin/python -m pytest python/tests -q
-.venv/bin/python -m build --no-isolation
-```
-
-The shared library is `target/release/libcine_core.so`; the standalone executable
-is `target/release/cine-tool`. Use a manylinux/musllinux build environment when
-preparing redistributable wheels later. This local build does not certify
-compatibility with older Linux distributions.
-
-### Windows native build
-
-Use the MSVC Rust toolchain, Visual Studio C++ Build Tools and Python matching the
-intended architecture. For an x64 Developer PowerShell, after installing them:
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install numpy pytest setuptools wheel build
-cargo build --release --workspace --locked
-.\.venv\Scripts\python.exe scripts\build_native.py
-.\.venv\Scripts\python.exe -m pip install --no-build-isolation -e .
-.\.venv\Scripts\python.exe -m pytest python\tests -q
-.\.venv\Scripts\python.exe -m build --no-isolation
-```
-
-The shared library is `target\release\cine_core.dll`; the standalone executable
-is `target\release\cine-tool.exe`. Build ARM64 separately with ARM64 Python and
-the corresponding Rust/MSVC toolchain. Run MATLAB's build on the same platform;
-copying a macOS MEX or dylib to Windows/Linux cannot work.
-
-## MATLAB
-
-Run `Matlab/build_cine_backend.m` in MATLAB after configuring `mex -setup C`.
-The script builds the shared Rust backend and the small MEX gateway for MATLAB's
-current platform. MATLAB public classes call that gateway; it performs no CINE
-parsing or pixel decoding itself. Build the MEX gateway on each supported MATLAB
-platform as MEX files are specific to MATLAB's platform ABI. See `Matlab/README.md`.
-
-## Optional image and video input
-
-```sh
-python -m pip install 'cine-handler[images]'
-```
-
-Pillow supplies image-file decoding. Install `ffmpeg` and `ffprobe` separately and
-put them on `PATH` for video input. They are not needed for CINE reading, writing
-NumPy images, or Rust use. Video decoding runs as a streaming subprocess. A known
-image count writes directly; an unknown-length generator/video uses a temporary
-spool on disk to keep memory bounded, then assembles the final CINE on close.

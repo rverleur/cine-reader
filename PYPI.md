@@ -9,11 +9,14 @@ processing and statistics. NumPy supplies the Python array interface.
 Install a wheel matching your operating system and processor:
 
 ```sh
-python -m pip install cine-handler
+python -m pip install --only-binary=:all: cine-handler
 ```
 
-A source installation additionally needs Rust/Cargo and a C linker. A matching
-wheel includes the native library and does not require Rust at runtime. See the
+Matching wheels include the native library. GitHub checkouts and source archives
+use a verified prebuilt library for the current operating system and processor.
+Normal installation never invokes Rust or a compiler. If no compatible binary
+is available, installation stops with an explanation instead of starting a build.
+See the
 [build guide](https://github.com/rverleur/cine-reader/blob/main/docs/BUILDING.md)
 for source, macOS, Linux and Windows builds.
 
@@ -55,7 +58,9 @@ read back with `Cine(path, canonical=True)` for matching coordinates.
 Known frame counts write directly. Unknown counts spool to disk and make one
 final copy, keeping RAM bounded. Existing outputs are never overwritten.
 Image-file decoding requires optional Pillow (`pip install 'cine-handler[images]'`).
-Video decoding requires separately installed FFmpeg and FFprobe.
+Video decoding uses optional PyAV (`pip install 'cine-handler[video]'`), whose
+wheels bundle the FFmpeg libraries. Install `cine-handler[media]` for both image
+and video input. No separate media-tool installation is required by these APIs.
 
 ## Processing and formats
 

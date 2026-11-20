@@ -73,8 +73,9 @@ retained samples. Explicit MAD and batch APIs intentionally allocate stacks.
 - **27 Rust tests** cover decoding, dimensions, malformed/truncated containers,
   ABI overlap/shape checks, annotations, trimming timestamp tags, processing,
   writer metadata, quantization, no-clobber publication, cleanup and ExFAT fallback.
-- **58 Python tests** pass with the external corpus enabled (44 without it, plus
-  14 skipped corpus cases). Source and installed macOS wheel tests were run.
+- **73 Python reader/writer tests** pass with the external corpus enabled (59
+  without it, plus 14 skipped corpus cases). Commit-hook and packaging tests run
+  alongside these in the developer gate.
 - **96 randomized processing comparisons** matched the archived Python result
   arrays, including all four Bayer patterns, edge shapes, repair and statistics.
 - **12 independent FFmpeg interoperability tests** recover normal mono8/16 and
@@ -104,6 +105,31 @@ In MATLAB run `test_rust_backend(corpus_directory)` after `build_cine_backend`.
 The source recordings are not distributed. FFmpeg/Pillow integration tests skip
 when their optional dependencies are unavailable.
 
+## Python-only installation
+
+The prebuilt packaging changes were checked on macOS ARM64 using a clean source
+snapshot with a collected backend and no local compiler output. With `PATH`
+empty and native-library overrides removed, wheel and source-archive builds
+succeeded. Eight fresh virtual environments then covered normal source,
+editable source, wheel and source-archive installations, both with pip's default
+build isolation and with preinstalled Python build dependencies. Dependencies
+were installed offline from downloaded wheels.
+
+Every environment passed **30 reader/writer and PyAV tests**, including normal
+and packed10 round trips and video conversion. Four environments also passed an
+actual Pillow image-file round trip. The legacy external-FFmpeg integration case
+was deliberately excluded from these Python-only checks. Installed libraries
+resolved inside the corresponding environment (or source tree for editable
+installs). The wheel contained only its matching library and manifest; the
+source archive retained the collected target directory. No Rust, C compiler,
+Git, FFmpeg or FFprobe executable was available to these checks.
+
+**31 packaging regression tests** additionally verify compiler-free selection,
+copying and platform tags; invalid manifests, stale sources, corrupted files,
+wrong architectures and incompatible system requirements are rejected. Windows
+and Linux selection is simulated in these tests; this does not replace native
+runtime testing on those platforms.
+
 ## Remaining external checks
 
 The generated files follow the supplied Cine File Format manual and have the
@@ -113,5 +139,7 @@ No claim of vendor certification is made. Linux, Windows and Intel macOS binarie
 also require builds and runtime tests on those platforms. Build guidance is in
 `docs/BUILDING.md`; a macOS ARM64 wheel and MATLAB MEX were built locally.
 
-The GitHub/PyPI publishing workflow, release version and future lint/test commit
-workflow are intentionally unchanged. Nothing was pushed or published.
+The local commit gate now checks formatting, lint, compilation and tests for
+Python, Rust and MATLAB. The GitHub/PyPI publishing workflow and release version
+remain deferred; these validation results do not describe the existing PyPI
+release.

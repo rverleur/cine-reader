@@ -4,3 +4,10 @@
 *.m text eol=lf
 *.toml text eol=lf
 miss_hit.cfg text eol=lf
+binaries/**/build-info.json text eol=lf
+binaries/**/cine-tool binary
+binaries/**/*.exe binary
+binaries/**/*.dll binary
+binaries/**/*.dylib binary
+binaries/**/*.so binary
+binaries/**/*.mex* binary
