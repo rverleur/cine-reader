@@ -1,187 +1,288 @@
-# Python API Notes
+# Python API
 
-## Reader Lifecycle
+The package is installed as `cine-handler` and imported as `cine_reader`.
+[Installation](README.md) and [IDE examples](examples/README.md) accompany this
+reference. All paths accept strings or `pathlib.Path` objects.
+
+## Reader lifecycle and frame numbering
 
 ```python
 from cine_reader import Cine
 
-with Cine("sample_data/TrimmedCine.cine") as cine:
-    cine.load_frame(cine.first_frame_number)
-    frame = cine.image
+with Cine("capture.cine", canonical=True) as cine:
+    first = cine.first_frame_number
+    cine.load_frame(first)
+    pixels = cine.image
 ```
 
-- `Cine(filename, keep_annotations=True, remove_dead_pixels=False, debayer=False, dead_value=None, dead_is_threshold=True, bayer_pattern="auto")`
-  - `remove_dead_pixels`: when `True`, repair dead pixels on every `load_frame`.
-  - `debayer`: when `True`, debayer raw CFA/Bayer frames on every `load_frame`.
-  - `bayer_pattern`: `auto` or one of `RGGB`, `BGGR`, `GRBG`, `GBRG`.
-- `open_cine_file(filename)`
-  - `filename`: path to `.cine`.
-- `close_file()`
-  - closes active file handle.
+```python
+Cine(filename, keep_annotations=True, *, remove_dead_pixels=False,
+     debayer=False, dead_value=None, dead_is_threshold=True,
+     bayer_pattern="auto", canonical=False)
+```
 
-## Frame Access
+| Option | Meaning |
+| --- | --- |
+| `keep_annotations` | Retain loaded frame annotation bytes. |
+| `remove_dead_pixels` | Repair each loaded image before optional demosaicing. |
+| `debayer` | Convert raw Bayer frames to RGB on load. |
+| `dead_value` | Marker/threshold; `None` infers it from camera setup. |
+| `dead_is_threshold` | Repair values `>= dead_value`; `False` repairs exact matches. |
+| `bayer_pattern` | `"auto"`, `"RGGB"`, `"BGGR"`, `"GRBG"` or `"GBRG"`. |
+| `canonical` | Use top-down rows and RGB channel order. |
 
-- `load_frame(image_no, convert_bgr_to_rgb=False)`
-  - `image_no`: global frame number (`file_header.FirstImageNo .. last_frame_number`).
-  - `convert_bgr_to_rgb`: channel-order conversion for 3-channel payloads.
-- `next_frame(increment=1, convert_bgr_to_rgb=False)`
-  - `increment`: frame-number step (can be negative).
-- `image` / `frame`
-  - alias for latest decoded pixel array (`pixel_array`).
-  - raw CFA/Bayer payloads remain 2D unless `debayer=True` or `debayer_frame()` is used.
-- `red_pixels` / `green_pixels` / `blue_pixels`
-  - `None` for mono frames.
-  - for raw CFA/Bayer color frames, `[H, W]` float arrays with actual sensor samples at that color's sites and `NaN` elsewhere.
-- `load_frames_batch(start_frame, count)`
-  - `start_frame`: first frame number in range.
-  - `count`: number of consecutive frames.
-  - output shape:
-    - mono or raw CFA: `[H, W, N]`
-    - debayered/interpolated color: `[H, W, 3, N]`
+Frame methods take **acquisition frame numbers**, which can be negative and run
+from `first_frame_number` through `last_frame_number`, inclusive. They are not
+zero-based array indices unless the recording starts at zero.
 
-## Image Processing
+`open_cine_file(filename)` reopens this object on another recording.
+`close_file()` closes its handle; a `with` block calls this automatically.
+Construction reads fixed metadata and defers the first decode until `image`,
+`frame`, `pixel_array` or another pending frame attribute is accessed. Explicit
+`load_frame` decodes immediately. Frame offsets, raw payload bytes, setup bytes
+and color-sample arrays are also loaded on demand.
 
-- `replace_dead_pixels(dead_value=None, dead_is_threshold=True)`
-  - `dead_value`: marker/threshold for dead pixels. If `None`, inferred from setup (`WhiteLevel + 1`, then `RealBPP` max).
-  - `dead_is_threshold`: when `True`, treat values `>= dead_value` as dead.
-  - behavior by frame type:
-    - mono 2D: 8-neighbor repair
-    - raw Bayer/CFA 2D: repair each 2x2 phase separately before demosaic
-    - RGB/BGR 3D: repair each channel independently
-- `debayer_frame(bayer_pattern="auto")`
-  - mutates the current raw CFA/Bayer `pixel_array` into RGB `[H, W, 3]`.
-- `get_frame_rgb(image_no=None, bayer_pattern="auto")`
-  - `image_no`: optional frame number to load first.
-  - `bayer_pattern`: `auto` or one of `RGGB`, `BGGR`, `GRBG`, `GBRG`.
+Each returned NumPy image owns its memory, so a saved array survives later frame
+loads. Explicit close and context exit materialize deferred first-frame and raw
+metadata state for compatibility with post-close access. Destruction and
+reopening discard pending state without decoding it. Use one reader per
+independent worker; do not call one reader concurrently.
 
-## Statistics
+## Frames, orientation and color
 
-- `average_frames(start_frame, end_frame, replace_dead_pixels=False, chunk_size=8)`
-  - `start_frame`, `end_frame`: inclusive frame range.
-  - `replace_dead_pixels`: apply dead-pixel correction before averaging.
-  - `chunk_size`: chunked accumulation size for bounded-memory averaging.
-- `mode_frames(start_frame, end_frame, replace_dead_pixels=False, method="auto", q_bg=0.80, k_sigma=2.5, min_keep=3, max_keep=96, stack_limit=128)`
-  - `method`: `auto | mad | topk`.
-  - `q_bg`: bright-background quantile threshold.
-  - `k_sigma`: MAD rejection multiplier (`mad` mode).
-  - `min_keep`: minimum accepted samples per pixel.
-  - `max_keep`: top-k cap (`topk` mode).
-  - `stack_limit`: switch threshold for `auto`.
-  - supports mono and RGB frame stacks.
+| Member | Result or action |
+| --- | --- |
+| `load_frame(image_no, *, convert_bgr_to_rgb=False)` | Load one frame; returns `None`. Read `image` afterward. |
+| `next_frame(increment=1, *, convert_bgr_to_rgb=False)` | Move relative to `current_frame`; negative steps are allowed within the recording. |
+| `image`, `frame`, `pixel_array` | Current `[H,W]` mono/raw image or `[H,W,3]` color image. |
+| `pixel_data` | Flattened current pixel array. |
+| `current_frame` | Current acquisition frame number. |
+| `load_frames_batch(start_frame, count)` | Allocate `[H,W,N]` or `[H,W,3,N]`, with frames on the **last** axis. |
+| `annotation_data`, `annotation` | Full retained annotation block and its payload. |
+| `image_data` | Original encoded image payload bytes, fetched lazily. |
+| `image_size`, `annotation_size` | Stored payload/block sizes. |
 
-## File Utilities
+Normal samples decode as uint8 or uint16 according to the file. Packed10 decodes
+to linear12 values in a uint16 array through Phantom's lookup table. Packed12
+and raw CFA reading are supported; proprietary CCI compression is not.
 
-- `save_frames_to_new_file(output_filename, start_frame, end_frame)`
-  - `output_filename`: destination `.cine` path.
-  - `start_frame`, `end_frame`: inclusive frame range to copy.
+By default, storage-row order and BGR channel order preserve the previous API,
+including bottom-up rows in ordinary positive-height uncompressed recordings.
+Prefer `canonical=True` for new analysis and comparisons with input images.
+`convert_bgr_to_rgb=True` changes channel order only, not row orientation.
 
-## Useful Top-Level Metadata Aliases
+Raw CFA/Bayer images are 2D until demosaiced. `red_pixels`, `green_pixels` and
+`blue_pixels` lazily expose `[H,W]` float sensor-sample arrays with `NaN` at sites
+belonging to the other colors; these remain based on the original mosaic after
+demosaicing. For interpolated three-channel images they expose their channels;
+for monochrome images they are `None`.
 
-- `first_frame_number` -> `file_header.FirstImageNo`
-- `total_frames` -> `file_header.ImageCount`
-- `last_frame_number` -> derived
-- `frame_rate` -> best available setup frame rate
-- `exposure_time_ns` / `exposure_time_seconds` / `exposure_time`
-- `recording_datetime` / `recording_date`
-- `cfa_code` / `bayer_pattern`
-
-## Specification-Aligned Metadata Objects
-
-Field names inside these objects intentionally follow CINE/BITMAP naming:
-
-- `file_header` (`CineHeader`)
-- `image_header` (`BitmapHeader`)
-- `camera_setup` (`Setup`)
-- `image_locations` (`ImageOffsets`)
-
-Examples of spec-style fields:
-
-- `file_header.FirstImageNo`
-- `file_header.ImageCount`
-- `image_header.biWidth`
-- `image_header.biBitCount`
-- `camera_setup.FrameRate`
-- `camera_setup.ShutterNs`
-- `camera_setup.RealBPP`
-
-## Rust backend and lazy access
-
-The existing reader signatures and metadata names remain available. Opening a
-`Cine` parses fixed metadata only; its first frame is decoded when an existing
-frame attribute such as `image` or `pixel_array` is first accessed. Explicit
-`load_frame` decodes immediately. Offset arrays, tagged setup bytes and the three
-color sample arrays are loaded only when accessed. The core owns file I/O and
-reusable payload buffers. Each returned NumPy frame owns its memory, so retaining
-a frame across subsequent loads is safe. Explicit `close_file()` and context
-exit materialize any pending first frame and raw metadata so those existing
-attributes remain usable after close. Destruction and reopening simply release
-the old native handle without reading deferred state.
-
-`Cine(path, canonical=True)` is an additional option: it returns top-down images
-and RGB color order. The default preserves the previous storage-row/BGR order,
-including bottom-up rows for positive-height uncompressed CINE. Use canonical
-mode when comparing images with input arrays passed to the writer. Packed raw
-frames remain raw mosaics unless debayering is requested.
-
-## Writing images and videos
+### Processing the current frame
 
 ```python
-from cine_reader import Cine, CineWriter, write_cine, write_cine_from_images, write_cine_from_video
+cine.replace_dead_pixels(dead_value=None, dead_is_threshold=True)
+cine.debayer_frame(bayer_pattern="auto")
+rgb = cine.get_frame_rgb(image_no=None, bayer_pattern="auto")
+```
 
-# frames: iterable of uint8/uint16 [H,W] or RGB [H,W,3] arrays.
-write_cine("normal.cine", frames, frame_rate=1000, first_frame=-20)
-write_cine("packed.cine", frames, encoding="packed10", frame_rate=1000)
-write_cine_from_images("photos.cine", sorted(image_paths), frame_rate=30)
-write_cine_from_video("video.cine", "input.mp4")
+`replace_dead_pixels` updates the current image. Mono repair uses valid adjacent
+neighbors, Bayer repair uses neighbors of the same Bayer phase, and RGB repair
+operates per channel. An inferred packed10 threshold is converted through the
+lookup table before comparing with decoded linear values.
 
-with Cine("normal.cine", canonical=True) as cine:
-    image = cine.image
+`debayer_frame` updates the current mosaic to RGB; use it only for raw Bayer data
+(it also normalizes a loaded three-channel BGR image to RGB).
+`get_frame_rgb` returns a converted array without replacing the current image;
+an optional `image_no` first loads that frame. For 2D data it uses the requested
+or metadata-derived Bayer pattern, falling back to RGGB when metadata has none.
+For an ordinary monochrome image, use `image` directly instead of demosaicing it.
+
+## Statistics and trimming
+
+```python
+mean = cine.average_frames(start_frame, end_frame, replace_dead_pixels=False, chunk_size=8)
+background = cine.mode_frames(
+    start_frame,
+    end_frame,
+    replace_dead_pixels=False,
+    method="auto",
+    q_bg=0.80,
+    k_sigma=2.5,
+    min_keep=3,
+    max_keep=96,
+    stack_limit=128,
+)
+cine.save_frames_to_new_file(output_filename, start_frame, end_frame)
+```
+
+All ranges are inclusive. Mean estimation retains one Rust accumulator; the
+positive `chunk_size` argument remains accepted for API compatibility and does
+not allocate a chunk stack. Its output uses the current frame's dtype. Statistics
+preserve the historical rounding to the nearest integer with ties to even.
+
+Despite its historical name, `mode_frames` estimates a **bright background**,
+not a histogram mode. `method="mad"` stores all samples for quantile/MAD rejection.
+`"topk"` retains the brightest samples, bounded by `max_keep`; setting
+`max_keep=None` removes that cap. `"auto"` selects MAD up to `stack_limit` frames
+and top-k above it. `q_bg` is a quantile in `(0,1)`, `k_sigma` is the MAD multiplier
+and `min_keep` controls minimum retained samples. Output is uint16 and supports
+mono and color shapes. These operations load through the reader and leave its
+current-frame state at the last processed frame.
+
+Trimming copies the original encoded frames, preserves acquisition numbers and
+adjusts known per-frame time tags. It does not re-encode images or bake any
+processing into the file. The output path must not already exist.
+
+## Metadata
+
+| Convenience property | Meaning |
+| --- | --- |
+| `first_frame_number`, `total_frames`, `last_frame_number` | Acquisition frame range and count. |
+| `frame_rate` | Best available setup frame rate, in Hz. |
+| `exposure_time_ns` | Exposure in nanoseconds. |
+| `exposure_time_seconds`, `exposure_time` | Exposure in seconds. |
+| `recording_datetime`, `recording_date` | Recording timestamp/date when available. |
+| `cfa_code`, `bayer_pattern` | CFA identifier and inferred Bayer layout. |
+
+The metadata objects preserve specification-style names:
+
+| Object/type | Example fields |
+| --- | --- |
+| `file_header` / `CineHeader` | `FirstImageNo`, `ImageCount` |
+| `image_header` / `BitmapHeader` | `biWidth`, `biHeight`, `biBitCount`, `biCompression` |
+| `camera_setup` / `Setup` | `FrameRate`, `ShutterNs`, `RealBPP`, `WhiteLevel`, `CFA`, `SetupData` |
+| `image_locations` / `ImageOffsets` | `pImage`, `pImageData` |
+
+Accessing `image_locations` materializes the offset table; `pImage` includes a
+trailing file-end sentinel. Leave it lazy when only individual frames are needed.
+Recording timezones use the specification's seconds-west-of-UTC convention:
+`RecordingTimeZone=14400` means UTC-04:00.
+
+## Writing array sequences and streams
+
+```python
+from cine_reader import CineWriter, write_cine
+
+# Arrays: top-down mono [H,W] or RGB [H,W,3], using uint8 or uint16.
+output = write_cine("normal.cine", frames, frame_rate=1000, first_frame=-20)
+output = write_cine("packed.cine", frames, encoding="packed10", frame_rate=1000)
 
 with CineWriter(
-    "stream.cine", width=640, height=480, dtype="uint16", frame_count=100, frame_rate=1000
+    "stream.cine",
+    width=640,
+    height=480,
+    dtype="uint16",
+    channels=1,
+    frame_count=100,
+    frame_rate=1000,
 ) as writer:
     for frame in source:
         writer.write_frame(frame)
 ```
 
-- Writer input always uses top-down rows and RGB order.
-- `encoding="normal"` preserves uint8/uint16 values, including RGB24/RGB48.
-  `bit_depth` describes the meaningful sample bits (default 8 or 16).
-- `encoding="packed10"` implements Phantom P10, **not linear 10-bit truncation**:
-  uint16 samples must be linear values in 0..4095 and are quantized to the nearest
-  entry of Phantom's 12-bit lookup table. Values below the table's first entry
-  are clamped to that entry. uint8 samples are scaled to 0..4095 first.
-- RGB packed10 input is sampled to a Bayer mosaic. This loses two color samples
-  per pixel in addition to P10 quantization. Use normal RGB for exact color
-  preservation. `cfa=4` (RGGB) is the default for RGB packed10; CFA 3, 5 and 6
-  select GBRG, GRBG and BGGR. For a mono-shaped raw Bayer array specify its CFA.
-- Partial packed10 groups are padded in the file and discarded on decoding.
-  Images in a sequence must have identical dimensions, channels and dtype.
-  No silent resizing occurs.
-- `CineWriter(..., frame_count=None)` supports unknown-length streams with a
-  temporary disk spool. Supplying the exact count avoids that extra disk pass.
-  `write_cine` automatically uses the length of sized collections and NumPy stacks.
-- A successful `close()` or context exit publishes a complete output. A failed
-  write, short declared sequence, or exceptional context exit removes temporary
-  data. Existing destinations are never overwritten. `abort()` discards a stream.
-- Image files require the optional `images` extra (Pillow). Supplied order is
-  retained. Palette images become RGB; alpha channels are discarded.
-- Video input uses the optional `video` extra (PyAV with bundled media libraries),
-  selects the first video stream, and decodes
-  RGB8 (or `grayscale=True` gray8) one frame at a time. Stored pixel orientation
-  is retained; video rotation metadata is not applied. Audio is ignored. The output
-  has a constant frame rate; supply `frame_rate=` when converting variable-rate
-  input. No external executable is needed by the default backend. Explicit
-  `backend="ffmpeg"`, or custom `ffmpeg=` / `ffprobe=` paths, selects the legacy
-  subprocess backend and requires those separately installed tools.
+`frames` is an iterable of arrays. A NumPy stack is iterated on its **first**
+axis: `[N,H,W]` or `[N,H,W,3]`. This differs from reader batches; convert one with
+`np.moveaxis(batch, -1, 0)` before writing. Dimensions, channels and dtype must
+stay identical through a sequence. No resizing or float-to-integer conversion
+is done implicitly.
 
-Writer output follows the supplied CINE specification. An end-to-end PCC open
-check must be performed on a Windows system with PCC before claiming tested
-compatibility with a particular PCC release.
+```python
+CineWriter(filename, *, width, height, dtype=np.uint16, channels=1,
+           encoding="normal", frame_count=None, frame_rate=30.0,
+           first_frame=0, bit_depth=None, cfa=0)
+```
 
-For packed10 files, automatic dead-pixel thresholds now convert `WhiteLevel`
-through the Phantom lookup table before comparing it with decoded linear pixels.
-This corrects the old comparison between encoded 10-bit and decoded 12-bit values.
+| Option | Behavior |
+| --- | --- |
+| `width`, `height` | Positive image dimensions. |
+| `dtype` | uint8 or uint16; each appended frame must match. |
+| `channels` | `1` for mono/raw Bayer; `3` for RGB. |
+| `encoding` | `"normal"` or `"packed10"`. |
+| `frame_count` | Exact positive count, or `None` for an unknown-length stream. |
+| `frame_rate` | Positive finite constant acquisition rate. |
+| `first_frame` | First acquisition number, including negative values. |
+| `bit_depth` | Normal: 8 for uint8, 9–16 for uint16; default follows dtype. Packed10: 12. Values must fit the meaningful depth. |
+| `cfa` | `0` for mono/normal RGB; Bayer `3=GBRG`, `4=RGGB`, `5=GRBG`, `6=BGGR`. |
 
-Recording timezone decoding now follows the specification's seconds-west-of-UTC
-convention. For example, `RecordingTimeZone=14400` yields UTC-04:00.
+`write_cine` infers dimensions/channels/dtype from the first image and accepts the
+remaining writer options. It infers an exact count from sized collections.
+Both this helper and `CineWriter` process images incrementally. Unknown-length
+streams use a temporary disk spool and a final copy; an exact count avoids that
+extra disk pass. `frames_written` reports the appended count.
+
+Successful `close()` or context exit finalizes and publishes a complete file.
+`abort()` or an exceptional context exit discards temporary output. A short
+declared sequence fails finalization. Existing destinations are never replaced.
+All writing helpers return the completed output `Path`.
+
+### Encoding choices
+
+Normal writing preserves all samples, including RGB24/RGB48. Packed10 stores
+Phantom P10 codes, **not simple linear 10-bit truncation**. Uint16 input must
+contain linear values in `0..4095`, quantized to the nearest entry of Phantom's
+12-bit lookup table; values below its first entry clamp to that entry. Uint8
+input is first scaled to `0..4095`.
+
+RGB packed10 also samples one color per Bayer site, losing two color samples
+per pixel in addition to quantization. RGGB (`cfa=4`) is its default pattern.
+For a mono-shaped raw Bayer image, supply its CFA explicitly. Partial groups
+are padded in the file and discarded when reading. Packed12 reading is supported,
+but packed12 writing is not offered.
+
+## Image-file and video conversion
+
+```python
+from cine_reader import write_cine_from_images, write_cine_from_video
+
+write_cine_from_images("photos.cine", ordered_image_paths, frame_rate=30)
+write_cine_from_video("video.cine", "input.mp4", encoding="normal")
+```
+
+`write_cine_from_images(filename, image_paths, **options)` requires Pillow
+(`cine-handler[images]`) and retains the supplied path order. It supports
+grayscale, 16-bit grayscale and RGB images, converts palette images to RGB, and
+discards alpha channels. Images must agree in shape and dtype.
+
+```python
+write_cine_from_video(filename, video_filename, *, encoding="normal",
+                      grayscale=False, frame_rate=None,
+                      ffmpeg="ffmpeg", ffprobe="ffprobe", backend=None, **options)
+```
+
+The default backend is PyAV (`cine-handler[video]`), whose wheels provide the
+media libraries without separate executable tools. It decodes the first video
+stream as RGB8 or gray8 one frame at a time; audio is ignored. Stored pixel
+orientation is retained and rotation metadata is not applied. The output has a
+constant frame rate; supply `frame_rate` when converting variable-rate input.
+Normal encoding preserves these decoded samples, not the source video's codec
+or original high-bit-depth representation.
+
+Explicit `backend="ffmpeg"`, or custom `ffmpeg`/`ffprobe` paths without a backend
+override, selects the optional subprocess backend and requires those tools to
+be installed separately. `backend="pyav"` explicitly selects PyAV. Writer
+options such as `first_frame` are forwarded through `**options`.
+
+## Array-only helpers
+
+These public helpers use the same Rust backend without opening a CINE file:
+
+| Helper | Purpose |
+| --- | --- |
+| `replace_dead_pixels(frame, *, dead_value=4095, dead_is_threshold=False, bayer_raw=False)` | Repair mono, raw Bayer or color arrays. |
+| `replace_dead_pixels_mono`, `replace_dead_pixels_bayer`, `replace_dead_pixels_rgb` | Explicit repair variants accepting `frame`, `dead_value=4095` and keyword-only `dead_is_threshold=False`. |
+| `demosaic_bilinear(frame, pattern="RGGB")` | Convert a 2D Bayer array into RGB. |
+| `average_from_frame_iter(frames, *, out_dtype=None, chunk_size=8)` | Return `(mean, count)` using one accumulator; output defaults to the first frame dtype. |
+| `robust_background_mad_stack(frames, *, q_bg=0.80, k_sigma=2.5, min_keep=3, out_dtype=np.uint16)` | Full-stack bright-background estimate. |
+| `robust_background_topk(frames, *, frame_count, q_bg=0.80, min_keep=3, max_keep=96, out_dtype=np.uint16)` | Bounded retained-sample background estimate. |
+| `unpack_10bit_data(data)` | Decode each complete five-byte group into four linear uint16 samples through Rust. |
+| `unpack_10bit_numpy(data)` | NumPy reference implementation retained for compatibility/comparison. |
+
+Repair/demosaic helpers return processed arrays. Statistics round their estimates
+to integer sample values with ties to even, even when a floating `out_dtype` is
+requested. Low-level unpack helpers ignore incomplete trailing groups; use
+`Cine` to handle complete frame dimensions and any padded packed10 samples.
+
+Writer output follows the supplied CINE specification and has independent
+reader/FFmpeg checks. PCC itself has not been tested; see the
+[validation record](../docs/VALIDATION.md) before assuming compatibility with a
+particular PCC release.

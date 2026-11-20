@@ -5,43 +5,80 @@ adapter only manages MATLAB arrays, lifetimes and array layout. Reading,
 decoding, trimming, encoding, pixel processing and statistics run in Rust.
 No Image Processing or Statistics Toolbox is required.
 
-## Build on the current system
+## Install as a MATLAB user
 
-Install [Rust](https://rustup.rs/) and a C compiler supported by your MATLAB
-release. In MATLAB:
+Download and extract the GitHub source archive or clone the repository. Keep
+`Matlab/`, `binaries/`, and the Rust source/build metadata together: the installer
+checks that the collected binaries match this checkout. In MATLAB:
+
+```matlab
+addpath('<repo>/Matlab')
+install_cine_backend
+test_rust_backend
+```
+
+This needs MATLAB and the OS-provided SHA256 utility (`shasum` on macOS,
+`sha256sum` on Linux, PowerShell `Get-FileHash` on Windows), but no Python, Rust,
+Cargo, C compiler, Java configuration, or additional MATLAB toolbox. The
+installer verifies target, ABI,
+Rust source fingerprint, artifact sizes and SHA256 checksums before copying the
+matching MEX gateway and Rust library into `Matlab/private/`. Missing, corrupted
+or stale binaries produce an error; the installer never compiles or downloads.
+Run it again after updating the checkout, with all `Cine`/`CineWriter` objects
+closed or deleted. Add the `Matlab` folder to your project path each session
+(or use MATLAB's **Set Path** dialog); do not add `private/` directly.
+
+| Collected target | MATLAB validation |
+| --- | --- |
+| Apple Silicon macOS (`maca64`) | MATLAB R2025b |
+| Windows x64 (`win64`) | MATLAB R2026b Update 1 |
+| glibc Linux x64 (`glnxa64`) | Debian 13, MATLAB R2026b Update 1 |
+
+Other MATLAB releases have not been verified with these gateways. Each MATLAB
+release also has its own OS requirements. Linux's gateway needs glibc 2.34 or
+newer and MATLAB's runtime libraries; the Rust library's glibc 2.28 portability
+does not extend to the MEX gateway. Intel macOS and other architectures need
+separately collected artifacts. See [binary coverage](../binaries/README.md).
+
+## Build as a developer
+
+Install stable [Rust](https://rustup.rs/) and a C compiler supported by your
+MATLAB release. For Windows use Visual Studio C++ Build Tools and Rust's MSVC
+target; macOS uses Xcode Command Line Tools; Linux uses a supported GCC. In MATLAB:
 
 ```matlab
 addpath('<repo>/Matlab')
 mex -setup C
 build_cine_backend
+test_rust_backend
 ```
 
 The build script locates the repository independently of the current directory,
 builds Cargo's release library, and copies it under `private/lib/<architecture>`.
 It builds `private/cine_mex.<mexext>` for the current MATLAB platform. The old
 `build_mex_unpack10bit_cached` function remains as an alias to this build.
+The Rust library uses baseline CPU instructions and requires no GPU.
 
-Build separately on macOS Apple Silicon, macOS Intel, Linux and Windows. MEX
-binaries are specific to the platform and MATLAB's supported compiler/runtime;
-a macOS MEX cannot run on Windows/Linux. The Rust library uses ordinary scalar
-CPU instructions and requires no GPU or architecture-specific accelerator.
-
-On Windows install the MSVC Rust toolchain and the Visual Studio C++ workload,
-then configure the same compiler with `mex -setup C`. On Linux install GCC and
-Rust, then run the same MATLAB build command. Build inputs are local; the Rust
-crate has no third-party dependencies. If Cargo is installed outside its usual
-location, put it on MATLAB's inherited `PATH`.
+Build inputs are local; the Rust crate has no third-party dependencies. If Cargo
+is installed outside its usual location, put it on MATLAB's inherited `PATH`.
+After changing Rust or the C gateway, rebuild and test on every supported
+platform before recollecting distribution binaries. See the shared
+[maintainer build guide](../docs/BUILDING.md) and
+[development/commit checks](../docs/DEVELOPMENT.md). Python developer packages
+are required for the all-language commit gate, not for ordinary MATLAB use.
 
 ## Read
 
 ```matlab
 cine = Cine('recording.cine', 'RemoveDeadPixels', false, 'Debayer', false);
-first = cine.FileHeader.FirstImageNo;
+first = double(cine.FileHeader.FirstImageNo);
+last = first + double(cine.FileHeader.ImageCount) - 1;
 frame = cine.PixelArray;        % first frame is decoded on demand
-cine.LoadFrame(first + 1);
-avg = cine.AverageFrames(first, first + 10);
-bg = cine.ModeFrames(first, first + 20, false, 'method', 'topk');
-cine.SaveFramesToNewFile('trim.cine', first, first + 20);
+cine.LoadFrame(min(first + 1, last));
+avg = cine.AverageFrames(first, min(first + 10, last));
+% ModeFrames supports mono/raw Bayer frames:
+bg = cine.ModeFrames(first, min(first + 20, last), false, 'method', 'topk');
+cine.SaveFramesToNewFile('trim.cine', first, min(first + 20, last));
 cine.CloseFile();
 ```
 
@@ -57,7 +94,9 @@ Deleting an object or reopening it releases discarded state immediately.
 
 Existing arrays preserve storage row order and BGR channel order for
 interpolated color. Raw CFA frames remain 2D unless debayering is requested.
-`GetFrameRGB` provides RGB channel order. `UseMemMap`, `AssumeConstAnn` and
+`GetFrameRGB` provides RGB channel order, retaining storage row order. For
+top-down display, apply `flipud` when `ImageHeader.biHeight > 0`.
+`UseMemMap`, `AssumeConstAnn` and
 `Debug` remain accepted compatibility properties; Rust validates frame bounds
 and handles I/O, so these properties do not select another backend.
 
@@ -65,6 +104,9 @@ and handles I/O, so these properties do not select another backend.
 samples with NaN at the other color sites. `ModeFrames` supports mono frames;
 `method='mad'` keeps the selected frame stack, while `topk` bounds memory using
 `max_keep`. AverageFrames uses one Rust accumulator regardless of frame count.
+The background estimate is intended for bright backgrounds and is not an exact
+histogram mode. Dead-pixel repair is opt-in: 4095 is the default defect marker,
+but it can also be a valid saturated sample in your recording.
 
 ## Write
 
@@ -102,6 +144,27 @@ write_cine('video.cine', VideoReader('input.mp4'));
 Video input supports formats decoded by the installed MATLAB `VideoReader`.
 Image dimensions, channels and integer type must remain consistent. MATLAB's
 writer emits the same format as the Python and standalone Rust APIs.
+Packed10 quantization and RGB-to-Bayer sampling are irreversible; retain your
+originals when the lossless normal formats are required. Output follows the CINE
+format specification, but PCC playback still needs independent validation with
+PCC itself; see [validation results](../docs/VALIDATION.md).
+
+## Examples
+
+Open these scripts in the MATLAB Editor and adjust the configuration at the
+top. They generate small demonstration inputs when no input is supplied, and
+choose new temporary output paths so reruns do not overwrite earlier results.
+They require the backend to be installed first.
+
+| Example | Features |
+| --- | --- |
+| [basic_usage.m](examples/basic_usage.m) | Lazy metadata, global frame numbers, annotations, one-frame reads, small batches, display orientation |
+| [color_processing.m](examples/color_processing.m) | Raw CFA samples, dead-pixel repair, automatic Bayer pattern and RGB demosaicing |
+| [processing_and_trim.m](examples/processing_and_trim.m) | Streaming mean, bounded bright-background estimate, subtraction and lossless trimming |
+| [streaming_write.m](examples/streaming_write.m) | Normal/packed10 mono, RGB, known/unknown-length writing and cleanup |
+| [images_and_video.m](examples/images_and_video.m) | Ordered image paths, MATLAB VideoReader, image/video-to-CINE conversion |
+
+See [API.md](API.md) for options, shape conventions, memory behavior and lifecycle.
 
 ## Verify
 
@@ -109,6 +172,8 @@ writer emits the same format as the Python and standalone Rust APIs.
 test_rust_backend
 % Include a local corpus of genuine camera files:
 test_rust_backend('/path/to/sample_cines')
+% After collecting binaries, validate manifests and installer rejection cases:
+test_prebuilt_backend
 ```
 
 The test covers mono/RGB 8/16-bit round trips, packed10, known/unknown lengths,

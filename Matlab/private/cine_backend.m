@@ -11,9 +11,11 @@ function varargout = cine_backend(varargin)
             name = 'libcine_core.so';
         end
         lib = fullfile(here, 'lib', computer('arch'), name);
-        if ~isfile(lib)
-            error('cine:build', 'Rust backend not built for %s. Run build_cine_backend from Matlab/.', ...
-                  computer('arch'));
+        if ~isfile(lib) || ~isfile(fullfile(here, ['cine_mex.' mexext]))
+            lib = [];
+            error('cine:build', ...
+                  ['Backend not installed for %s. Run install_cine_backend to use the collected binaries, ' ...
+                   'or build_cine_backend to compile from source.'], computer('arch'));
         end
     end
     cine_mex('init', lib);
