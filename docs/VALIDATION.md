@@ -135,11 +135,11 @@ runtime testing on those platforms.
 The generated files follow the supplied Cine File Format manual and have the
 independent checks above. **PCC itself was not available**, so opening/playback in
 PCC remains unverified, especially for dimensions unlike a Phantom camera sensor.
-No claim of vendor certification is made. Linux and Intel macOS binaries still
-require builds and runtime tests on those platforms. The Windows Python library
-and standalone tool have native validation below, together with the MATLAB
-R2026b gateway. Build guidance is in `docs/BUILDING.md`; a macOS ARM64 wheel and MATLAB
-MEX were built locally.
+No claim of vendor certification is made. Intel macOS, Linux ARM64 and musl Linux
+still require their own builds and runtime tests. Windows x64 and glibc Linux
+x64 validation is recorded below, including their MATLAB R2026b gateways. Build
+guidance is in `docs/BUILDING.md`; a macOS ARM64 wheel and MATLAB MEX were built
+locally.
 
 ## Windows x64 validation
 
@@ -186,3 +186,47 @@ The local commit gate now checks formatting, lint, compilation and tests for
 Python, Rust and MATLAB. The GitHub/PyPI publishing workflow and release version
 remain deferred; these validation results do not describe the existing PyPI
 release.
+
+## Linux x64 validation
+
+The Debian 13.5 VM used Python 3.13.5, glibc 2.41, Rust 1.100.0, GCC 14.2 and
+MATLAB R2026b Update 1. After native build/test validation, the Rust library and
+CLI were rebuilt inside the pinned PyPA `manylinux_2_28_x86_64` container using
+glibc 2.28 and baseline CPU instructions. The collected manifest identifies the
+image digest, source commit, Rust source fingerprint and artifact checksums.
+
+- All **27 Rust tests** passed in both build environments. The final portable
+  library passed **103 Python/tooling tests** on Debian. Fifteen optional cases
+  were skipped: the absent legacy smoke recording and 14 unconfigured corpus
+  cases. A separate selected corpus test passed for `visible_0_2500.cine`.
+- The transferred recording's size and SHA256 match the Windows/Mac reference
+  above. The portable CLI decoded all **2,501 frames** on both Debian and the
+  glibc 2.28 container.
+- Frames **0, 1250 and 2500** exactly match the archived reader's raw hashes and
+  the current Mac/Windows raw and demosaiced hashes. Nine PNGs were exported for
+  inspection using the same fixed preview scale, retaining original samples in
+  the 16-bit raw PNGs.
+- The native MATLAB gateway passed reader/writer, lifecycle, processing,
+  image-list and video tests using the final portable Rust companion library.
+  MATLAB's three reference raw frames exactly match the Python PNGs.
+- Auditwheel 6.8.2 confirmed `manylinux_2_28_x86_64` compatibility. Repair changed
+  the wheel tags without changing the Rust library bytes or adding shared
+  libraries. The packaged manifest's checksums were verified after repair, and
+  Twine's metadata check passed.
+- Four fresh consumer environments covered both wheel and clean-checkout
+  installation on Debian and glibc 2.28/CPython 3.13.18. Each used empty `PATH`,
+  no native-library/compiler overrides, offline Python dependency wheels and
+  pip's default build isolation. Each passed **30 writer/PyAV tests**, a Pillow
+  image-file round trip, and all three reference frame comparisons. The explicit
+  external-FFmpeg test was deselected. Installed library paths resolved inside
+  each fresh environment and all hashes matched the collected portable backend.
+
+The collected artifacts are `libcine_core.so`, `cine-tool`, `cine_mex.mexa64` and
+`build-info.json`. MATLAB's gateway was built on Debian, imports glibc symbols
+through 2.34, and needs MATLAB's own libraries; it has not been validated on
+older distributions or other MATLAB releases. Its requirements are recorded
+separately from the portable Rust backend's glibc 2.28 floor.
+
+The audited wheel and verification images remain local validation artifacts on
+the Debian VM. No GitHub release or PyPI upload was made, and the existing Python
+version is unchanged pending release preparation.

@@ -139,6 +139,45 @@ distributions: its manifest records a conservative libc requirement. Build and
 audit manylinux/musllinux wheels in the corresponding containers before broad
 Linux distribution. Do not rename a wheel to claim another platform or libc.
 
+### Linux portability
+
+The collected x86_64 Rust backend and CLI were built with Rust 1.100.0 inside
+`quay.io/pypa/manylinux_2_28_x86_64`; `binaries/x86_64-unknown-linux-gnu/build-info.json`
+records the exact image digest, source fingerprint and checksums. The audited
+wheel uses `py3-none-manylinux_2_28_x86_64`. Both the wheel and a clean checkout
+were installed and tested without compiler tools on glibc 2.28 and Debian 13.
+These artifacts do not cover musl Linux or ARM64.
+
+For future builds, compile and test the Rust library and CLI inside the
+manylinux image with an isolated Cargo target directory and baseline CPU flags.
+Generate their manifest in that same environment so its libc requirement matches
+the build. Copy the resulting library into the Python package and MATLAB's
+companion-library directory before testing. Preserve the native MATLAB gateway
+and its separately recorded requirements when assembling the collected folder.
+Do not run the native collector afterward: it would replace the portable backend
+with a newer host build.
+
+Build the wheel from those collected artifacts inside the container, then audit
+and repair it there (substitute the wheel produced for the intended version):
+
+```sh
+auditwheel show /path/to/cine_handler-VERSION-py3-none-linux_x86_64.whl
+auditwheel repair --plat manylinux_2_28_x86_64 --only-plat \
+    --wheel-dir /path/to/portable \
+    /path/to/cine_handler-VERSION-py3-none-linux_x86_64.whl
+```
+
+Inspect the repaired wheel again and verify its library SHA256 against the
+packaged manifest. For the current std-only Rust build, auditwheel leaves the
+library unchanged and adds no bundled shared libraries. If a future repair
+changes the library, regenerate the packaged checksums and repeat runtime tests
+before distributing it. Renaming a wheel is not a substitute for this audit.
+
+The MATLAB R2026b gateway was compiled separately on Debian 13 with GCC 14.2.
+Its imported glibc symbols reach 2.34, and it also requires MATLAB's `libmx.so`
+and `libmex.so`. Only its Debian 13/MATLAB R2026b runtime has been verified; the
+Python backend's manylinux claim does not extend to the MATLAB gateway.
+
 The existing release workflow has not been migrated to a native wheel matrix.
 Do not publish this refactor through that workflow until the separately planned
 GitHub/PyPI release work is complete.
