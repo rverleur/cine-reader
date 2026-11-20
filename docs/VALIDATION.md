@@ -247,8 +247,9 @@ applicable to those binaries; the VMs were not needed for this packaging pass.
   passed MATLAB's full synthetic reader/writer tests. Validation rejects stale
   source, same-size binary corruption, missing gateways and incompatible ABIs;
   CRLF-normalized sources and paths containing shell metacharacters also passed.
-  Native installer execution in this pass covered macOS R2025b. The new Windows
-  and Linux installer branches have not been executed on their powered-off VMs.
+  Native installer execution in that pass covered macOS R2025b. The subsequent
+  Windows installer verification is recorded below; Linux installer execution
+  remains to be verified on its VM.
 - The full staged commit gate passed Python/Rust/MATLAB formatting, linting,
   compilation and tests, including the configured 14-file camera corpus.
   Separate release-validator regression tests cover all three target manifests,
@@ -271,3 +272,33 @@ applicable to those binaries; the VMs were not needed for this packaging pass.
   build/test run remains to be performed after pushing; a manual run builds
   artifacts without publishing. No GitHub release or PyPI upload was performed
   during this preparation.
+
+## Windows MATLAB installer verification
+
+A clean Git archive of the 0.2.0 preparation was tested on Windows x64 with
+MATLAB R2026b Update 1. The archive initially contained no local MEX, companion
+DLL or Cargo build directory. MATLAB resolved the interface from that archive,
+and its executable `PATH` was emptied before installation and runtime tests.
+
+The first run exposed Windows PowerShell module-loading progress serialized as
+CLIXML before a valid SHA256 digest. The installer now suppresses that progress,
+requests text output and makes PowerShell errors terminating. It retains encoded
+literal paths and strict digest validation; no Rust or MEX binary changed.
+
+With the fix applied:
+
+- `install_cine_backend` installed the collected Windows DLL and MEX without
+  invoking Python, Rust or a C compiler.
+- `test_prebuilt_backend` passed, including CRLF normalization, paths containing
+  spaces/apostrophes/shell metacharacters, stale source, same-size corruption,
+  missing gateway and incompatible ABI checks.
+- The complete MATLAB synthetic reader/writer suite passed against the installed
+  prebuilt backend, including processing and image/video conversion.
+- Frames 0, 1250 and 2500 of `visible_0_2500.cine` exactly matched the previously
+  verified Windows/Python raw16 PNG arrays. The recording's SHA256 remained
+  `8c551f6afd2050c5c54d606904d85c81aea78c2bc767c776cce6cb34f32749e1`.
+- Reinstallation was rejected with a live reader. After closing/deleting that
+  reader, reinstallation and another reference-frame read succeeded in the same
+  MATLAB process, verifying Windows DLL unloading before replacement.
+- Installed DLL/MEX sizes and SHA256 hashes exactly matched the collected
+  manifest. All native source inputs and collected artifacts remained unchanged.

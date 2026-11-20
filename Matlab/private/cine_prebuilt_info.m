@@ -92,9 +92,12 @@ function result = fileDigest(filename)
     if ispc
         executable = fullfile(getenv('SystemRoot'), 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
         literal = strrep(filename, '''', '''''');
-        script = sprintf('(Get-FileHash -Algorithm SHA256 -LiteralPath ''%s'').Hash', literal);
+        % Module-loading progress must not prefix the digest with CLIXML.
+        script = sprintf(['$ProgressPreference = ''SilentlyContinue''; ' ...
+                          '$ErrorActionPreference = ''Stop''; ' ...
+                          '(Get-FileHash -Algorithm SHA256 -LiteralPath ''%s'').Hash'], literal);
         encoded = matlab.net.base64encode(unicode2native(script, 'UTF-16LE'));
-        command = sprintf('"%s" -NoProfile -NonInteractive -EncodedCommand %s', executable, encoded);
+        command = sprintf('"%s" -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand %s', executable, encoded);
     else
         % POSIX single-quote escaping keeps spaces and shell metacharacters literal.
         literal = ['''', strrep(filename, '''', '''"''"'''), ''''];
