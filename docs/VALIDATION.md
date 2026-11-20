@@ -135,9 +135,45 @@ runtime testing on those platforms.
 The generated files follow the supplied Cine File Format manual and have the
 independent checks above. **PCC itself was not available**, so opening/playback in
 PCC remains unverified, especially for dimensions unlike a Phantom camera sensor.
-No claim of vendor certification is made. Linux, Windows and Intel macOS binaries
-also require builds and runtime tests on those platforms. Build guidance is in
-`docs/BUILDING.md`; a macOS ARM64 wheel and MATLAB MEX were built locally.
+No claim of vendor certification is made. Linux and Intel macOS binaries still
+require builds and runtime tests on those platforms. The Windows Python library
+and standalone tool have the native validation below; its MATLAB gateway remains
+unbuilt. Build guidance is in `docs/BUILDING.md`; a macOS ARM64 wheel and MATLAB
+MEX were built locally.
+
+## Windows x64 validation
+
+The Windows library and standalone executable were built natively with Rust
+1.100.0, Visual Studio 2022 C++ Build Tools and Python 3.13.17. Native validation
+passed all **27 Rust tests**, **103 Python/tooling tests**, Python/Rust formatting,
+Ruff and Clippy. The Python suite skipped 14 optional corpus cases and one absent
+legacy smoke fixture; a separate selected corpus test passed for the transferred
+`visible_0_2500.cine` recording.
+
+- The transferred 1,024,510,432-byte recording has SHA256
+  `8c551f6afd2050c5c54d606904d85c81aea78c2bc767c776cce6cb34f32749e1`,
+  identical to the Mac original. The Windows CLI decoded all **2,501 frames**.
+- Frames **0, 1250 and 2500** exactly match the archived reader's raw pixel hashes.
+  Raw and demosaiced sample arrays also match the current Mac reader exactly.
+- Both platforms exported lossless 16-bit raw PNGs, raw previews and demosaiced
+  RGB previews. All nine corresponding PNG pixel arrays match. Display previews
+  use a fixed 0–4095 to 0–255 linear scale without white balance or gamma changes;
+  the original-depth PNGs preserve decoded samples.
+- `dumpbin /DEPENDENTS` reports only Windows system dependencies for the DLL and
+  CLI: `KERNEL32.dll`, `ntdll.dll` and `api-ms-win-core-synch-l1-2-0.dll`. Neither
+  artifact imports a separate Visual C++ redistributable DLL.
+- The Windows wheel and source archive built successfully and passed Twine's
+  metadata checks. They remain local validation artifacts, not published releases.
+- Fresh Windows environments installed the wheel and a clean checkout with
+  `PATH` empty, no compiler/library overrides, offline Python dependency wheels,
+  and pip's default build isolation. Each passed **30 writer/PyAV tests**, a
+  Pillow image-file round trip and the three reference camera frame comparisons.
+  Package and DLL paths were verified inside each isolated environment. Rust,
+  Git, C compilers, FFmpeg and FFprobe were unavailable to these consumer checks.
+
+MATLAB is not installed on the Windows test machine, so Windows MATLAB compilation
+and runtime tests were deliberately deferred. The collected Windows artifacts
+are the Rust DLL, standalone executable and checksummed build manifest.
 
 The local commit gate now checks formatting, lint, compilation and tests for
 Python, Rust and MATLAB. The GitHub/PyPI publishing workflow and release version
