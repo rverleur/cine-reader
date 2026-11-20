@@ -14,6 +14,9 @@
   glibc Linux x64. Python wheels, source archives and GitHub checkouts use prebuilt
   libraries without Rust or C toolchains.
 - Add a MATLAB-only installer for the collected MEX gateways and shared libraries.
+- Verify native MATLAB installation on all three collected platforms. Prevent
+  Linux reinstallation/rebuild crashes from overwriting a retained shared library,
+  and require a restart before replacing a changed backend that remains loaded.
 - Expand Python/MATLAB API documentation and runnable feature examples, add the
   MIT license file, and remove obsolete C implementation/build distributions.
 - Require staged formatting, linting, compilation and tests before local commits

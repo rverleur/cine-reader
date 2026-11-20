@@ -28,6 +28,12 @@ Run it again after updating the checkout, with all `Cine`/`CineWriter` objects
 closed or deleted. Add the `Matlab` folder to your project path each session
 (or use MATLAB's **Set Path** dialog); do not add `private/` directly.
 
+On Linux, MATLAB can retain the Rust library after a backend error even when
+all objects are closed. Reinstalling identical binaries is safe in the same
+session. If installation or rebuilding reports `cine:restart`, restart MATLAB
+and rerun the command before using the updated backend. This prevents loading
+an old retained library or overwriting code that is still mapped in memory.
+
 | Collected target | MATLAB validation |
 | --- | --- |
 | Apple Silicon macOS (`maca64`) | MATLAB R2025b |

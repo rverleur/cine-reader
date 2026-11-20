@@ -13,8 +13,8 @@ function install_cine_backend
         mkdir(destination);
     end
     clear cine_mex cine_backend;
-    copyfile(fullfile(source, library), fullfile(destination, library));
-    copyfile(fullfile(source, gateway), fullfile(here, 'private', gateway));
+    cine_copy_binary(fullfile(source, library), fullfile(destination, library));
+    cine_copy_binary(fullfile(source, gateway), fullfile(here, 'private', gateway));
     rehash;
     fprintf('Installed verified %s backend and %s gateway.\n', info.target, gateway);
     fprintf('Gateway built/tested with MATLAB R%s; running R%s.\n', info.matlab_release, version('-release'));

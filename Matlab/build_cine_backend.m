@@ -36,7 +36,7 @@ function build_cine_backend
         mkdir(destination);
     end
     clear cine_mex cine_backend;
-    copyfile(librarySource, fullfile(destination, library));
+    cine_copy_binary(librarySource, fullfile(destination, library));
     args = {'-R2018a', ['-I' fullfile(root, 'rust', 'cine-core', 'include')], ...
             fullfile(here, 'private', 'cine_mex.c'), '-outdir', fullfile(here, 'private')};
     if isunix && ~ismac

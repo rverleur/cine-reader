@@ -18,5 +18,6 @@ function check_commit
            'MATLAB Code Analyzer reported %d issue(s).', issueCount);
     build_cine_backend;
     test_rust_backend(getenv('CINE_TEST_CORPUS'));
+    test_backend_reinstall(@build_cine_backend);
     fprintf('MATLAB compilation, Code Analyzer and tests passed.\n');
 end

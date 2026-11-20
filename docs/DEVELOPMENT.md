@@ -15,7 +15,8 @@ their external dependencies have an explicit isolated-check policy.
 | MATLAB | MISS_HIT formatting and lint, MATLAB Code Analyzer, Rust/MEX build, native tests |
 
 Python tests use the freshly compiled Rust library and the staged Python package.
-MATLAB builds its MEX adapter against that same staged Rust source. Builds use a
+MATLAB builds its MEX adapter against that same staged Rust source and verifies
+rebuilding/reopening after a native error in the same session. Builds use a
 separate `target/commit-check` cache; no generated library is copied into working
 source files. Formatters run in check mode and never rewrite or stage files during
 a commit. A missing tool, license failure, test failure, lint warning or formatting

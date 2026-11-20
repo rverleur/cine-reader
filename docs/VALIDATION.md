@@ -248,8 +248,7 @@ applicable to those binaries; the VMs were not needed for this packaging pass.
   source, same-size binary corruption, missing gateways and incompatible ABIs;
   CRLF-normalized sources and paths containing shell metacharacters also passed.
   Native installer execution in that pass covered macOS R2025b. The subsequent
-  Windows installer verification is recorded below; Linux installer execution
-  remains to be verified on its VM.
+  Windows and Linux installer verification is recorded below.
 - The full staged commit gate passed Python/Rust/MATLAB formatting, linting,
   compilation and tests, including the configured 14-file camera corpus.
   Separate release-validator regression tests cover all three target manifests,
@@ -302,3 +301,49 @@ With the fix applied:
   MATLAB process, verifying Windows DLL unloading before replacement.
 - Installed DLL/MEX sizes and SHA256 hashes exactly matched the collected
   manifest. All native source inputs and collected artifacts remained unchanged.
+
+## Linux installer and release-package verification
+
+After pulling the Windows installer fix, the Debian 13.5 VM tested a clean Git
+archive with only the MATLAB changes described below overlaid. It contained no
+local MEX, companion library or Cargo build output. MATLAB R2026b Update 1
+resolved the interface from that archive, with executable `PATH` empty throughout
+installation and runtime tests.
+
+The initial installation, validation tests and reader/writer tests passed. A
+same-session reinstall after a native error exposed a Linux loader issue: Rust's
+thread-local error state kept the shared library mapped after MEX cleanup, while
+`copyfile` overwrote that mapped file in place. Reopening then crashed MATLAB.
+A separate `/proc/self/maps` probe confirmed that successful reads alone unloaded
+the library, whereas a native error retained it.
+
+The installer and developer builder now publish Linux libraries by copying to a
+new file and renaming it over the destination. Existing mappings retain their
+original bytes. A changed or removed library still mapped in this process causes
+an explicit `cine:restart` error before replacement, avoiding reuse of old code.
+The commit gate exercises the same-session error/rebuild/read regression against
+its staged developer build, independently of the collected binaries.
+
+With the fix applied:
+
+- MATLAB-only installation, prebuilt validation/rejection tests, the complete
+  synthetic reader/writer suite and the new reinstallation regression passed.
+- Reinstalling with a live reader was rejected. After closing/deleting readers,
+  same-session reinstallation and decoding succeeded even after a native error.
+  A changed retained library was rejected without damaging the installed backend.
+- Camera frames 0, 1250 and 2500 exactly matched the previously verified raw16
+  PNG arrays. The recording's SHA256 still matched the Mac/Windows reference.
+- Installed MEX/library hashes and sizes matched the collected manifest. The
+  portable Linux CLI decoded all 2,501 frames, and the selected Python corpus
+  test matched the archived reader's three raw frame hashes.
+- The 0.2.0 Linux wheel and source archive passed release validation and Twine's
+  metadata checks. Auditwheel confirmed `manylinux_2_28_x86_64` compatibility
+  without changing the collected Rust library bytes.
+- Fresh wheel, checkout and source-archive environments each passed **45 Python
+  tests** with empty `PATH`, offline Python dependencies and default pip build
+  isolation. Their 28 expected skips cover absent external recordings and the
+  deliberately unavailable external FFmpeg tools. Installed package/library paths
+  and SHA256 hashes were verified within each environment.
+
+No Rust/C gateway source or collected native artifact changed. All changes and
+validation artifacts remained on Debian; nothing was published to GitHub or PyPI.
