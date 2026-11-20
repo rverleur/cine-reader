@@ -1,39 +1,28 @@
-include README.md
-include PYPI.md
-include pyproject.toml
-include pytest.ini
+include LICENSE README.md PYPI.md CHANGELOG.md
+include pyproject.toml setup.py pytest.ini miss_hit.cfg
+include Cargo.toml Cargo.lock .cargo/config.toml
 graft python/src
 graft python/examples
 graft python/tests
-include python/README.md
-include python/API.md
-prune python/src/cine_reader.egg-info
-prune python/src/cine_handler.egg-info
-prune Matlab
-prune c_src
-prune docs
-prune release
-prune sample_data
-global-exclude __pycache__
-global-exclude *.py[cod]
-global-exclude .DS_Store
-
-include setup.py
+include python/README.md python/API.md
 graft rust/cine-core/src
 graft rust/cine-core/include
 graft rust/cine-core/tests
-include rust/cine-core/Cargo.toml
-include Cargo.toml
-include Cargo.lock
-include .cargo/config.toml
+include rust/cine-core/Cargo.toml rust/cine-core/README.md
+graft Matlab
 graft scripts
-include docs/BUILDING.md
-include docs/DEVELOPMENT.md
-include docs/VALIDATION.md
-include rust/cine-core/README.md
+graft .githooks
+graft .github
+include docs/BUILDING.md docs/DEVELOPMENT.md docs/VALIDATION.md docs/RELEASING.md
+include sample_data/README.md
 graft binaries
 
-# Wheels select one verified backend; source archives retain all collected targets.
-# Exclude local build outputs, which have no validated artifact manifest.
-recursive-exclude python/src/cine_reader/libs *
-global-exclude *.py[cod]
+# Native artifacts live only in binaries/. Wheels select one matching library.
+prune python/src/cine_reader.egg-info
+prune python/src/cine_handler.egg-info
+prune python/src/cine_reader/libs
+prune Matlab/private/lib
+prune python/examples/output
+prune Matlab/examples/output
+recursive-exclude Matlab *.mex*
+global-exclude __pycache__ *.py[cod] .DS_Store

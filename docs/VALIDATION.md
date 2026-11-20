@@ -182,10 +182,10 @@ standalone executable and checksummed build manifest. The manifest records the
 MATLAB release, and the MATLAB companion DLL matches the collected Rust DLL
 byte-for-byte.
 
-The local commit gate now checks formatting, lint, compilation and tests for
-Python, Rust and MATLAB. The GitHub/PyPI publishing workflow and release version
-remain deferred; these validation results do not describe the existing PyPI
-release.
+The local commit gate checks formatting, lint, compilation and tests for Python,
+Rust and MATLAB. These results validate the refactored backend; they do not
+describe the older 0.1.1 PyPI package. See the release-preparation notes below
+for subsequent packaging and documentation checks.
 
 ## Linux x64 validation
 
@@ -230,3 +230,44 @@ separately from the portable Rust backend's glibc 2.28 floor.
 The audited wheel and verification images remain local validation artifacts on
 the Debian VM. No GitHub release or PyPI upload was made, and the existing Python
 version is unchanged pending release preparation.
+
+## 0.2.0 release preparation on macOS
+
+The release preparation changes preserve every collected Rust library, CLI and
+MEX byte. All three platform manifests still match their artifact checksums and
+the current Rust source fingerprint. Windows/Linux runtime results above remain
+applicable to those binaries; the VMs were not needed for this packaging pass.
+
+- Python and MATLAB installation/API guides and feature examples were reviewed
+  against the implemented APIs. All six Python examples and all five MATLAB
+  examples ran successfully with generated inputs; Python reading/processing
+  also used the reference camera recording.
+- The new MATLAB-only installer passed in a fresh temporary checkout without
+  local native build output and with `PATH` empty. The installed prebuilt backend
+  passed MATLAB's full synthetic reader/writer tests. Validation rejects stale
+  source, same-size binary corruption, missing gateways and incompatible ABIs;
+  CRLF-normalized sources and paths containing shell metacharacters also passed.
+  Native installer execution in this pass covered macOS R2025b. The new Windows
+  and Linux installer branches have not been executed on their powered-off VMs.
+- The full staged commit gate passed Python/Rust/MATLAB formatting, linting,
+  compilation and tests, including the configured 14-file camera corpus.
+  Separate release-validator regression tests cover all three target manifests,
+  corrupted or relabeled wheels, incomplete release sets, licenses, `RECORD`
+  checksums and stale source archives. Their fixtures permit committing new Rust
+  source before recollecting binaries; actual release validation still rejects
+  stale binaries.
+- The 0.2.0 Mac wheel and source archive passed Twine metadata checks and archive
+  validation. The wheel has only its matching backend and manifest; the source
+  archive preserves every collected target and all three language interfaces,
+  while excluding private recordings and stale compiler/build output.
+- Fresh wheel, checkout and source-archive installations each passed **45 Python
+  tests** with `PATH` empty, offline Python dependencies and default pip build
+  isolation. Their 28 expected skips cover unavailable external recordings and
+  external FFmpeg executables. Additional fresh installations each passed
+  **30 writer/PyAV tests**, a Pillow image-file round trip and exact archived
+  camera frame hashes at frames 0, 1250 and 2500. Installed library paths and
+  SHA256 checks were verified inside each fresh environment.
+- The GitHub workflow passed local actionlint validation. Its hosted three-OS
+  build/test run remains to be performed after pushing; a manual run builds
+  artifacts without publishing. No GitHub release or PyPI upload was performed
+  during this preparation.

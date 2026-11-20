@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=70.1", "wheel"]
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cine-handler"
-version = "0.1.1"
+version = "0.2.0"
 description = "Streaming Rust-backed reader and writer for Vision Research Phantom .cine files"
 readme = { file = "PYPI.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
@@ -12,6 +12,7 @@ authors = [
   { name = "Rees Verleur" }
 ]
 license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["phantom", "cine", "high-speed-camera", "imaging"]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -40,7 +41,7 @@ images = ["Pillow>=9"]
 video = ["av>=12"]
 media = ["Pillow>=9", "av>=12"]
 dev = [
-  "setuptools>=70.1",
+  "setuptools>=77.0.3",
   "wheel",
   "build>=1.2",
   "pytest>=8.0",
@@ -55,7 +56,7 @@ dev = [
 target-version = "py39"
 line-length = 100
 src = ["python/src"]
-extend-exclude = ["build", "dist", "release", "target"]
+extend-exclude = ["build", "dist", "target"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]

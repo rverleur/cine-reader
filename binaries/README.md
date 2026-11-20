@@ -71,10 +71,13 @@ fingerprint identifies the actual Rust inputs. Python installers reject missing,
 stale, mismatched, or corrupted artifacts. A new Rust change requires recollecting
 each target before distributing that revision to users.
 
-When consuming the MATLAB artifacts directly, copy the gateway into
-`Matlab/private/` and its shared library into `Matlab/private/lib/<MATLAB arch>/`.
-For Windows the architecture is `win64`; Linux x64 uses `glnxa64`; Apple Silicon
-uses `maca64`; Intel macOS uses `maci64`.
+MATLAB users run `install_cine_backend` with `Matlab/` on their path. It validates
+the selected artifacts and copies the gateway into `Matlab/private/` and its
+shared library into `Matlab/private/lib/<MATLAB arch>/`. No Python, Rust or C
+compiler is needed. For Windows the architecture is `win64`; Linux x64 uses
+`glnxa64`; Apple Silicon uses `maca64`. The installer also recognizes `maci64`,
+but an Intel macOS build has not been collected.
 
-Python wheels remain under `dist/` until versioning and release preparation.
+Python distributions are built under `dist/release/` by `scripts/release.py`;
+see the [release packaging guide](../docs/RELEASING.md).
 Reference CINE recordings are test data and must not be added to this directory.

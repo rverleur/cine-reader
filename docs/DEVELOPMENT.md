@@ -106,17 +106,18 @@ git config --local cine.testCorpus '/path/to/cine-compressor/fixtures/sample_cin
 ```
 
 A configured but missing directory fails the gate. An unconfigured corpus is
-reported as skipped by its optional tests. This machine's clone is configured
-with the supplied sample directory. Clear that local setting when moving to a
-machine without the recordings, or configure its corresponding path there.
+reported as skipped by its optional tests. Clear any copied local setting when moving to a machine without the recordings,
+or configure its corresponding path there. Configure the full 14-file corpus
+for the complete suite; use a selected test when only one recording is present.
 
 ## Scope and limitations
 
 Local hooks protect normal development commits, but Git deliberately permits
 bypassing hooks (for example `--no-verify`) and does not run them for every history
 rewriting operation. Server-side required checks/branch protection are a separate
-GitHub step. No GitHub publishing, package version or PyPI release workflow is
-changed here.
+GitHub step. The [release workflow](RELEASING.md) validates and tests packaged
+Python wheels on the three included targets. It does not replace the full local
+Rust/MATLAB gate, which requires installed compilers and a licensed MATLAB.
 
 Tool references: [Git hooks](https://git-scm.com/docs/githooks),
 [Ruff formatter](https://docs.astral.sh/ruff/formatter/),

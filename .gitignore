@@ -9,6 +9,7 @@ __pycache__/
 .build/
 build/
 dist/
+release/
 .venv/
 .pytest_cache/
 .ruff_cache/
@@ -25,6 +26,8 @@ Matlab/private/lib/
 !/binaries/**/*.mex*
 
 # Local data
+python/examples/output/
+Matlab/examples/output/
 *.tiff
 *.tif
 *.npz

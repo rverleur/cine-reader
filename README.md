@@ -1,142 +1,150 @@
 # cine-reader
 
-Streaming Vision Research Phantom CINE reading and writing, with one portable
-Rust backend and compatible Python and MATLAB interfaces. The core has no
-third-party dependencies and requires no GPU or optional CPU instruction set.
+Read, process, trim and write Vision Research Phantom `.cine` files with Python,
+MATLAB or a standalone Rust library/tool. One Rust backend handles file I/O,
+encoding, decoding and pixel processing. Frames load on demand, without keeping
+an entire recording in memory. No GPU or optional CPU instruction set is needed.
 
-This is an **unreleased refactor**. Publishing workflows and the Python
-package version are unchanged for the later release work. See the
-[build instructions](docs/BUILDING.md) before installing this checkout.
+The Python distribution is **`cine-handler`**; its import name is **`cine_reader`**.
+See the [0.2.0 changes](CHANGELOG.md), [Python API](python/API.md),
+[MATLAB API](Matlab/API.md) and [validation results](docs/VALIDATION.md).
 
-## Python
+## Install for Python
 
-The distribution is `cine-handler`; the import remains `cine_reader`. Matching
-wheels include the native backend. GitHub checkouts and source archives select
-a verified prebuilt backend from `binaries/`. Neither installation invokes Rust
-or a compiler. A backend must be available for the user's operating system and
-processor; see the [collected targets](binaries/README.md) for current coverage.
+For the published 0.2.0 release:
 
 ```sh
-python -m pip install -e .
+python -m pip install --only-binary=:all: "cine-handler[media]==0.2.0"
 ```
 
-Existing calls retain their names, arguments, frame numbering, NumPy dtypes,
-storage row order and BGR convention:
+For a downloaded or cloned copy of this repository, run from its root:
+
+```sh
+python -m pip install ".[media]"
+# Editable installation for IDE use:
+python -m pip install -e ".[media]"
+```
+
+Until 0.2.0 is published, use the checkout installation. Omit `[media]` if you
+only need CINE files and NumPy arrays. The `images` extra installs Pillow; `video`
+installs PyAV; `media` installs both. PyAV wheels include the FFmpeg libraries, so
+the default video conversion needs no separate FFmpeg executable.
+
+Wheels include their matching Rust library. Checkouts and source archives select
+it from `binaries/`, validating its architecture, checksums and Rust source
+fingerprint. **Python users do not need Rust, a C compiler or MATLAB.** Missing or
+incompatible binaries produce an error rather than starting a compiler download.
+Use a 64-bit Python 3.9 or newer; Python dependencies can impose their own OS
+minimums. If the older `cine-reader` distribution is installed, uninstall it
+first because it shares the `cine_reader` import name.
+
+| Included target | Python backend | MATLAB gateway tested with |
+| --- | --- | --- |
+| Apple Silicon macOS | ARM64, macOS 11+ | MATLAB R2025b |
+| Windows | x64 | MATLAB R2026b |
+| Linux | x64, glibc 2.28+ | MATLAB R2026b on Debian 13 |
+
+Intel macOS, Windows ARM64, Linux ARM64 and musl/Alpine Linux need separate
+builds. MATLAB also has its own OS requirements; its Linux gateway imports glibc
+symbols through 2.34. See [binary coverage](binaries/README.md) for exact provenance.
+
+## Read and write in Python
 
 ```python
 from cine_reader import Cine
 
-with Cine("capture.cine") as cine:
+with Cine("capture.cine", canonical=True) as cine:
     print(cine.total_frames, cine.frame_rate)
-    cine.load_frame(cine.first_frame_number)
-    image = cine.image
-    cine.next_frame()
+    for number in range(cine.first_frame_number, cine.last_frame_number + 1):
+        cine.load_frame(number)
+        frame = cine.image
+        # Process this frame before requesting the next one.
 ```
 
-Opening reads bounded metadata only. The first frame, offset table, raw payload
-bytes and color-sample arrays are materialized when requested. Returned NumPy
-frames remain valid when subsequent frames load or the reader closes. Explicit
-close materializes remaining legacy state so it stays available afterward;
-destruction and reopening release discarded state without that extra work.
-
-For ordinary top-down image coordinates and RGB channels, opt in with
-`Cine(path, canonical=True)`. This is useful when reading newly encoded images:
+`canonical=True` returns top-down coordinates and RGB channels for decoded color
+images. The default preserves the previous API's storage row order and BGR
+convention. Raw Bayer frames remain 2D mosaics unless `debayer=True`. Frame
+numbers follow the acquisition numbering, which can be negative.
 
 ```python
 import numpy as np
-from cine_reader import Cine, write_cine, write_cine_from_images, write_cine_from_video
+from cine_reader import CineWriter, write_cine_from_images, write_cine_from_video
 
-images = [np.zeros((480, 640), dtype=np.uint16) for _ in range(3)]
-write_cine("normal.cine", images, frame_rate=1000)
-write_cine("packed.cine", images, encoding="packed10", frame_rate=1000)
+with CineWriter("generated.cine", width=640, height=480, frame_rate=1000, frame_count=10) as writer:
+    for number in range(10):
+        writer.write_frame(np.full((480, 640), number, dtype=np.uint16))
+
 write_cine_from_images("photos.cine", ["001.png", "002.png"], frame_rate=30)
-write_cine_from_video("video.cine", "input.mp4")
-
-with Cine("normal.cine", canonical=True) as cine:
-    assert np.array_equal(cine.image, images[0])
+write_cine_from_video("video.cine", "input.mp4", encoding="packed10")
 ```
 
-`CineWriter` accepts one frame at a time; `write_cine` also accepts generators.
-Known frame counts write in a single pass. Unknown counts use a disk spool and
-one final copy, keeping memory independent of the number of frames. Existing
-destinations are never overwritten, and unsuccessful writes are discarded.
-Image decoding uses optional Pillow (`pip install '.[images]'`); video decoding
-uses optional PyAV (`pip install '.[video]'`), whose wheels bundle the FFmpeg
-libraries. Install `.[media]` for both. These features need only Python packages;
-the standalone FFmpeg/FFprobe programs are used only by the optional explicit
-command-line backend and independent developer tests. See the [Python API](python/API.md).
+Use `encoding="normal"` for lossless uint8/uint16 mono or RGB; `packed10` uses
+Phantom's nonlinear quantization. Packed10 uint16 input must be in `0..4095`,
+while uint8 is scaled to that range. RGB packed10 input is sampled into a Bayer
+mosaic, so normal RGB is preferable when preserving every color sample matters.
+Packed12 reading is also supported. Proprietary compressed `.cci` is unsupported.
 
-## Encodings and orientation
+Writers accept one frame at a time. A known count writes directly; an unknown
+count uses a disk spool and final copy. Existing destinations are never replaced.
+Mean uses one accumulator and top-k backgrounds retain a bounded set of samples;
+explicit MAD and batch APIs intentionally allocate a frame stack.
 
-| Encoding | Input/output |
-| --- | --- |
-| Normal | Lossless uint8/uint16 grayscale or RGB; CFA mosaics also supported |
-| Packed10 | Phantom nonlinear 10-bit codes expanded to linear12 on read; quantized on write |
-| Packed12 | Lossless packed12 reading |
+The [Python examples](python/examples/README.md) cover reading, metadata, color,
+repair, statistics, trimming, incremental writing, image lists, video input and
+performance measurement. Configure their `__main__` blocks in your IDE.
 
-Packed10 uint16 input must be in `0..4095`; uint8 is scaled to that range. RGB
-input to packed10 is sampled into a Bayer mosaic, losing two color components
-per pixel. Use normal RGB when exact color preservation matters. Quantization
-chooses the nearest Phantom lookup-table value; arbitrary linear12 samples do
-not round-trip exactly through packed10.
+## Install and use with MATLAB
 
-Normal frames use the manual's bottom-up BGR storage and positive height;
-packed frames use top-down storage. Binding defaults preserve the old reader's
-storage order. Canonical reading converts coordinates/channels without changing
-the on-disk convention. Short final packed groups are zero padded.
-
-The writer implements the supplied format reference, including SETUP, timestamps,
-64-bit offsets and annotations. Outputs have also been checked independently with
-FFmpeg. **PCC acceptance still requires a Windows/PCC check**; PCC is not available
-in this environment. Proprietary compressed `.cci` files require the vendor SDK
-and are rejected.
-
-## MATLAB
+Download or clone this repository, then run in MATLAB from its root:
 
 ```matlab
-addpath('Matlab');
-build_cine_backend;
+addpath(fullfile(pwd, 'Matlab'));
+install_cine_backend;
+
 cine = Cine('capture.cine');
-cine.LoadFrame(cine.CurrentFrame + 1);
+cine.LoadFrame(cine.FileHeader.FirstImageNo);
 image = cine.PixelArray;
 cine.CloseFile();
 ```
 
-The new `cine_mex` gateway marshals MATLAB arrays into the same Rust library. It
-contains no CINE parser, decoder or image-processing implementation. Existing
-`Cine` methods remain available; `CineWriter` and `write_cine` add image/video
-encoding. See [MATLAB setup and API](Matlab/README.md).
+The installer copies the matching verified MEX gateway and Rust library from
+`binaries/`. **MATLAB users need MATLAB, but no Python, Rust or C compiler.** Keep
+`Matlab/` on the MATLAB path for later sessions. The MATLAB interface offers
+`Cine`, `CineWriter` and `write_cine`; the small C gateway only marshals arrays
+and calls Rust. It is still required and is not a leftover C implementation.
 
-## Standalone Rust
+See the [MATLAB installation guide](Matlab/README.md),
+[API](Matlab/API.md) and [examples](Matlab/examples/README.md). MATLAB video input
+uses `VideoReader`; codec availability depends on the MATLAB installation and OS.
 
-```sh
-cargo build --release --workspace --locked
-target/release/cine-tool info capture.cine
-target/release/cine-tool verify capture.cine
-target/release/cine-tool extract capture.cine 0 first-frame.raw
-target/release/cine-tool transcode capture.cine converted.cine normal
-```
+## Standalone tool and Rust development
 
-CLI indexes are zero based. Extracted bytes are tightly packed, top-down RGB or
-monochrome; uint16 samples are little endian. `Reader`, `writer::CineWriter`,
-image processing and statistics work independently of either binding. See
-[Rust API examples](rust/cine-core/README.md).
-
-## Building and verification
-
-See [BUILDING.md](docs/BUILDING.md) for macOS, Linux and Windows builds, wheel
-tagging, source installs and MATLAB relinking. Native macOS ARM64 binaries are
-built here; build other architectures on their corresponding platforms. Finished
-libraries and adapters are collected under tracked `binaries/<target>/` directories;
-compiler caches and temporary outputs remain ignored. See
-[binary collection and coverage](binaries/README.md).
+The collected `cine-tool` runs without Python or MATLAB. For example on Linux:
 
 ```sh
-cargo test --workspace --locked
-python -m pytest python/tests -q
+binaries/x86_64-unknown-linux-gnu/cine-tool info capture.cine
+binaries/x86_64-unknown-linux-gnu/cine-tool verify capture.cine
+binaries/x86_64-unknown-linux-gnu/cine-tool extract capture.cine 0 first-frame.raw
+binaries/x86_64-unknown-linux-gnu/cine-tool transcode capture.cine converted.cine normal
 ```
 
-[Validation notes](docs/VALIDATION.md) record corpus checks, independent comparisons,
-performance measurements and remaining platform validation. See the
-[development guide](docs/DEVELOPMENT.md) to install the commit gate, format working
-files and run staged build/lint/test checks. Publishing and CI changes remain separate.
+Use the matching target folder on macOS or Windows (`cine-tool.exe` on Windows).
+CLI indexes are zero based; extracted samples are tightly packed, top-down RGB
+or mono, with little-endian uint16 values. Rust users can use `Reader`,
+`writer::CineWriter` and processing APIs directly; see the [Rust guide](rust/cine-core/README.md).
+
+Developers modifying Rust need Rust/Cargo and a platform linker. Follow
+[BUILDING.md](docs/BUILDING.md) for OS-specific setup, rebuilding, MATLAB linking
+and binary collection. Install the [commit checks](docs/DEVELOPMENT.md) in every
+development clone. The [release guide](docs/RELEASING.md) describes packaging the
+collected binaries into wheels and source archives without rebuilding Rust.
+
+## Format validation and license
+
+The implementation follows `docs/reference/Cine File Format.pdf`. Tests cover
+camera recordings, synthetic format variants, malformed files, processing and
+writer round trips, with independent FFmpeg checks. **Direct PCC opening/playback
+has not been verified**; see [validation limits](docs/VALIDATION.md).
+
+Project code is licensed under [MIT](LICENSE). The third-party CINE format PDF
+retains its original copyright and is not covered by the project license.

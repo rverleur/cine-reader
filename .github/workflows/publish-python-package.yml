@@ -1,111 +1,151 @@
-name: Publish Python Package
+name: Build and publish Python package
 
 on:
+  workflow_dispatch:
   release:
-    types:
-      - published
+    types: [published]
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    name: Build Distribution
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
+    name: Package and test ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            architecture: arm64
+            target: aarch64-apple-darwin
+            sdist: "0"
+          - os: windows-2022
+            architecture: x64
+            target: x86_64-pc-windows-msvc
+            sdist: "0"
+          - os: ubuntu-24.04
+            architecture: x64
+            target: x86_64-unknown-linux-gnu
+            sdist: "1"
+    defaults:
+      run:
+        shell: bash
+    env:
+      CINE_RELEASE_OUTPUT: dist/release
+      CINE_RELEASE_REPORTS: dist/release-checks
+      CINE_RELEASE_SDIST: ${{ matrix.sdist }}
+      CINE_RELEASE_TAG: ${{ github.event.release.tag_name }}
+      EXPECTED_TARGET: ${{ matrix.target }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
-
-      - name: Validate release tag matches package version
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          python-version: "3.13"
+          architecture: ${{ matrix.architecture }}
+      - name: Install Python packaging tools
+        run: |
+          python -m pip install --only-binary=:all: "build>=1.2" "twine>=5" "setuptools>=77.0.3" wheel pytest
+      - name: Install Linux wheel audit tools
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install --only-binary=:all: "auditwheel==6.8.2" "patchelf>=0.14.5"
+      - name: Verify runner architecture and collected binaries
         run: |
           python - <<'PY'
-          import os
-          import tomllib
-          from pathlib import Path
-
-          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-          package_version = pyproject["project"]["version"]
-          tag_name = os.environ["RELEASE_TAG"]
-          normalized_tag = tag_name[1:] if tag_name.startswith("v") else tag_name
-
-          if normalized_tag != package_version:
-              raise SystemExit(
-                  f"Release tag {tag_name!r} does not match project version {package_version!r}."
-              )
-
-          print(f"Validated release tag {tag_name} against project version {package_version}.")
+          import os, sys
+          sys.path.insert(0, "scripts")
+          import release
+          actual = release.binary_module(release.ROOT).host_target()
+          assert actual == os.environ["EXPECTED_TARGET"], actual
+          release.validate_tag(release.ROOT, os.environ.get("CINE_RELEASE_TAG"))
+          release.validate_collection(release.ROOT)
           PY
-
-      - name: Install build and test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install .[dev]
-
-      - name: Run test suite
-        run: pytest python/tests -q
-
-      - name: Build sdist and wheel
-        run: python -m build
-
-      - name: Validate distribution metadata
-        run: python -m twine check dist/*
-
-      - name: Upload built distributions
+      - name: Test release validators
+        run: python -m pytest scripts/tests/test_release.py -q
+      - name: Package existing binaries and audit distributions
+        run: python scripts/release.py
+      - name: Test Python-only installation and runtime
+        run: python scripts/release_install_check.py
+      - name: Upload validation logs
+        if: always()
         uses: actions/upload-artifact@v5
         with:
+          name: install-checks-${{ matrix.target }}
+          path: dist/release-checks/
+          if-no-files-found: ignore
+      - name: Upload verified distributions
+        uses: actions/upload-artifact@v5
+        with:
+          name: distributions-${{ matrix.target }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  assemble:
+    name: Verify complete release set
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: distributions-*
+          merge-multiple: true
+          path: dist/release/
+      - name: Validate exactly three wheels and one source archive
+        env:
+          CINE_RELEASE_MODE: validate
+          CINE_RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python -m pip install --only-binary=:all: packaging "twine>=5"
+          python scripts/release.py
+          python -m twine check dist/release/*
+      - uses: actions/upload-artifact@v5
+        with:
           name: python-package-distributions
-          path: dist/
+          path: dist/release/*
+          if-no-files-found: error
 
   publish:
-    name: Publish To PyPI
-    if: ${{ !github.event.release.prerelease }}
-    needs:
-      - build
+    name: Publish to PyPI
+    if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+    needs: assemble
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/project/cine-handler/
     permissions:
       id-token: write
-
     steps:
-      - name: Download built distributions
-        uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v6
         with:
           name: python-package-distributions
           path: dist/
-
-      - name: Publish distributions
+      - name: Publish verified distributions using Trusted Publishing
         uses: pypa/gh-action-pypi-publish@release/v1
 
   attach-release-assets:
-    name: Attach Release Assets
-    if: ${{ !github.event.release.prerelease }}
-    needs:
-      - build
-      - publish
+    name: Attach release assets
+    if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}
+    needs: [assemble, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      - name: Download built distributions
-        uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v6
         with:
           name: python-package-distributions
           path: dist/
-
-      - name: Upload distributions to GitHub release
+      - name: Upload verified distributions to the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" dist/*
