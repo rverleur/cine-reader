@@ -2,12 +2,83 @@
 
 Read, process, trim and write Vision Research Phantom `.cine` files with Python,
 MATLAB or a standalone Rust library/tool. One Rust backend handles file I/O,
-encoding, decoding and pixel processing. Frames load on demand, without keeping
-an entire recording in memory. No GPU or optional CPU instruction set is needed.
+encoding, decoding and pixel processing. Frames load on demand, keeping memory overhead low.
 
 The Python distribution is **`cine-handler`**; its import name is **`cine_reader`**.
 See the [0.2.0 changes](CHANGELOG.md), [Python API](python/API.md),
 [MATLAB API](Matlab/API.md) and [validation results](docs/VALIDATION.md).
+
+## Measured performance
+
+Measured on **Apple M4 Max, 16 CPU cores, 128 GiB RAM, macOS 26.6.2**, using
+the published **cine-handler 0.2.0** macOS wheel, Python 3.14.6, NumPy 2.5.5 and
+Pillow 13.0.0 on November 19, 2026. The benchmark streamed the first **100 frames
+from each of six camera recordings**, using local APFS storage, without a GPU
+or an explicit worker pool.
+
+All values below are **milliseconds per frame per megapixel (ms/frame/MPx)**; lower
+is faster. Normalize as `elapsed_milliseconds / (frame_count * width * height / 1e6)`.
+RGB uses spatial megapixels, without multiplying by its three channels.
+
+**Reading:** five sequential passes after an initial traversal, with 1,500
+individual frame measurements per row. Timing covers `load_frame()` and access
+to the resulting NumPy array, excluding file construction and TIFF saving.
+The color RGB row also includes bilinear demosaicing; the color raw row retains
+the Bayer sensor mosaic.
+
+| Reading operation | Mean | Median | 95th percentile |
+| --- | ---: | ---: | ---: |
+| Monochrome, normal 12-bit / packed10 | 0.262 | 0.305 | 0.325 |
+| Color, packed10 → raw Bayer | 0.337 | 0.330 | 0.399 |
+| Color, packed10 → RGB | 3.131 | 3.130 | 3.272 |
+
+**Writing:** five complete 100-frame conversions per recording, using ordered,
+uncompressed TIFF files and a known frame count. These are end-to-end
+`write_cine_from_images()` timings: TIFF opening/decoding, encoding, headers,
+file synchronization and finalization are included. TIFF export and subsequent
+verification are excluded. Each row pools 15 whole-file trials normalized by
+frame count and megapixels, with equal numbers of trials per recording.
+
+| TIFF input → CINE output | Mean | Median | Minimum–maximum |
+| --- | ---: | ---: | ---: |
+| Monochrome uint16 → packed10 | 7.072 | 6.601 | 6.261–9.403 |
+| Monochrome uint16 → normal 12-bit | 8.839 | 6.151 | 5.853–14.964 |
+| Color Bayer uint16 → packed10 | 9.949 | 9.281 | 8.614–12.006 |
+| Color Bayer uint16 → normal 12-bit Bayer | 14.468 | 14.682 | 11.374–17.457 |
+| Color RGB uint8 → packed10 Bayer | 2.917 | 2.966 | 2.746–3.093 |
+
+For a concrete example, `visible_0_2500.cine` has 1280 × 256 pixels per frame.
+Its median raw frame load took **0.116 ms**, or **1.018 ms** including RGB
+demosaicing. Writing 100 frames from raw uint16 TIFFs to packed10 took a median
+**0.290 s**; writing from RGB8 TIFFs took **0.098 s**. The RGB8 route is lossy:
+it reduces the original linear 12-bit samples to 8-bit RGB, then samples a Bayer
+mosaic and applies packed10 quantization.
+
+<details>
+<summary>Per-recording median timings</summary>
+
+All timing columns use ms/frame/MPx. Writing columns use the original uint16
+sensor TIFFs. Read statistics pool individual normalized frames, with equal
+numbers of frames and passes per recording; monochrome results therefore
+combine both normal and packed10 input.
+
+| Recording | Source format | Dimensions | Raw reading | Packed10 writing | Normal writing |
+| --- | --- | --- | ---: | ---: | ---: |
+| `visible_0_2500.cine` | Packed10 color Bayer | 1280 × 256 | 0.354 | 8.843 | 14.682 |
+| `Color23CT.cine` | Packed10 color Bayer | 1280 × 384 | 0.323 | 11.927 | 11.961 |
+| `shot.cine` | Packed10 color Bayer | 1280 × 256 | 0.330 | 9.100 | 17.218 |
+| `45Degree 2.cine` | Normal 12-bit mono | 512 × 384 | 0.160 | 7.918 | 14.380 |
+| `FeNe_knife.cine` | Packed10 mono | 1280 × 800 | 0.311 | 6.412 | 6.128 |
+| `H50 15.cine` | Packed10 mono | 1280 × 800 | 0.308 | 6.601 | 5.949 |
+
+</details>
+
+Every frame of every generated trial was reopened and checked. All five
+packed10 sources preserved their decoded sensor samples exactly through
+uint16 TIFF → packed10, including the color CFA. The normal 12-bit source
+matched the expected packed10 quantization, with maximum error **4 / 4095**;
+normal outputs preserved all input samples exactly. Frame rate, acquisition
+start number and CFA were retained; other camera metadata was regenerated.
 
 ## Install for Python
 
@@ -25,8 +96,8 @@ python -m pip install ".[media]"
 python -m pip install -e ".[media]"
 ```
 
-Until 0.2.0 is published, use the checkout installation. Omit `[media]` if you
-only need CINE files and NumPy arrays. The `images` extra installs Pillow; `video`
+Omit `[media]` if you only need CINE files and NumPy arrays.
+The `images` extra installs Pillow; `video`
 installs PyAV; `media` installs both. PyAV wheels include the FFmpeg libraries, so
 the default video conversion needs no separate FFmpeg executable.
 
